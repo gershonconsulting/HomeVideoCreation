@@ -18,6 +18,18 @@ import fs from 'node:fs/promises';
 import { existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+// Shared yt-dlp flags to mitigate YouTube's anti-bot detection on cloud IPs:
+//  - player_client=android,web — the android client uses a different API path that's
+//    less aggressively bot-checked than the web player
+//  - user-agent — present as a real Chrome browser, not python-requests
+//  - js-runtimes — silence the "no JS runtime" warning by pointing at /usr/bin/node
+const YT_DLP_BASE_FLAGS = [
+  '--extractor-args', 'youtube:player_client=android,web,mweb',
+  '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  '--js-runtimes', 'node:/usr/bin/node',
+  '--no-warnings',
+];
+
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -114,6 +126,7 @@ function downloadAudio(youtubeUrl, dir, emit) {
 
     const outTemplate = path.join(dir, 'music.%(ext)s');
     const proc = spawn('yt-dlp', [
+      ...YT_DLP_BASE_FLAGS,
       '-x',
       '--audio-format', 'mp3',
       '--audio-quality', '0',
@@ -186,7 +199,7 @@ function probeDuration(audioPath) {
 // ───────────────────────────────────────────────────────────────
 function ytdlpMetadata(youtubeUrl) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('yt-dlp', ['-J', '--skip-download', '--no-warnings', youtubeUrl]);
+    const proc = spawn('yt-dlp', [...YT_DLP_BASE_FLAGS, '-J', '--skip-download', youtubeUrl]);
     let out = '', err = '';
     proc.stdout.on('data', (c) => (out += c.toString()));
     proc.stderr.on('data', (c) => (err += c.toString()));
