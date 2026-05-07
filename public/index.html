@@ -437,6 +437,10 @@
     letter-spacing: 0.18em;
     text-align: center;
   }
+
+.upload-divider { text-align:center; color:#999; font-size:13px; margin: 8px 0; letter-spacing: 2px; }
+.upload-label { display:block; padding:10px 14px; border:1px dashed #c8c8c8; border-radius:8px; cursor:pointer; font-size:14px; background:#fafafa; }
+.upload-label input[type=file] { margin-left:10px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -466,6 +470,12 @@
     </div>
     <p class="field-help">Any YouTube URL — the audio track becomes the soundtrack and sets the film's length.</p>
     <input type="url" id="audioUrl" placeholder="https://www.youtube.com/watch?v=…">
+    <div class="upload-divider">— or —</div>
+    <label class="upload-label">
+      Upload an MP3 / WAV / M4A directly
+      <input type="file" id="audioFile" accept="audio/*">
+    </label>
+    <div id="audioFileChosen" class="hint" style="display:none"></div>
     <div class="audio-actions">
       <button class="secondary" id="analyzeBtn">Analyze song →</button>
       <span class="hint" id="analyzeHint">Optional · finds synced lyrics + suggests how many photos</span>
@@ -633,31 +643,41 @@ async function startRender() {
   goBtn.disabled = true;
   goBtn.textContent = 'Rendering…';
 
-  const body = {
-    photosUrl: $('photosUrl').value.trim(),
-    audioUrl: $('audioUrl').value.trim(),
-    text: $('text').value,
-    options: {
-      resolution: $('resolution').value,
-      textPosition: $('textPosition').value,
-      preset: $('preset').value,
-      includeText: $('includeText').value === 'true',
-    },
+  const photosUrl = $('photosUrl').value.trim();
+  const audioUrl  = $('audioUrl').value.trim();
+  const audioFile = $('audioFile').files[0];
+  const text      = $('text').value;
+  const options = {
+    resolution: $('resolution').value,
+    textPosition: $('textPosition').value,
+    preset: $('preset').value,
+    includeText: $('includeText').value === 'true',
   };
 
-  if (!body.photosUrl || !body.audioUrl || !body.text.trim()) {
-    showError('Fill in all three fields above before rendering.');
+  if (!photosUrl || (!audioUrl && !audioFile) || !text.trim()) {
+    showError('Need photos URL, an MP3 (uploaded or YouTube), and text.');
     goBtn.disabled = false;
     goBtn.textContent = 'Render film →';
     return;
   }
 
+  // If user uploaded a file, send multipart; otherwise JSON.
+  let res;
   try {
-    const res = await fetch('/api/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    if (audioFile) {
+      const fd = new FormData();
+      fd.append('photosUrl', photosUrl);
+      fd.append('text', text);
+      fd.append('options', JSON.stringify(options));
+      fd.append('audioFile', audioFile);
+      res = await fetch('/api/render', { method: 'POST', body: fd });
+    } else {
+      res = await fetch('/api/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photosUrl, audioUrl, text, options }),
+      });
+    }
     if (!res.ok || !res.body) throw new Error('Server error: ' + res.status);
 
     const reader = res.body.getReader();
@@ -699,7 +719,8 @@ function handleEvent(e) {
       break;
 
     case 'audio':
-      if (e.status === 'fetching') setRow('audio', 'active', 'Extracting from YouTube', 0);
+      if (e.status === 'uploaded') setRow('audio', 'active', 'Using uploaded file: ' + e.filename, 0.95);
+      else if (e.status === 'fetching') setRow('audio', 'active', 'Extracting from YouTube', 0);
       else if (e.status === 'progress') setRow('audio', 'active', `Downloading ${e.percent.toFixed(0)}%`, e.percent / 100);
       else if (e.status === 'done') setRow('audio', 'done', 'Audio ready', 1);
       else if (e.status === 'duration') {
@@ -880,6 +901,20 @@ showLyricsBtn.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     if (!goBtn.disabled) startRender();
+  }
+});
+
+// Show the user the chosen audio filename + clear the URL field if they picked a file
+document.getElementById('audioFile').addEventListener('change', function(){
+  const f = this.files[0];
+  const note = document.getElementById('audioFileChosen');
+  if (f) {
+    note.textContent = 'Selected: ' + f.name + ' (' + (f.size/1024/1024).toFixed(1) + ' MB) — YouTube URL will be ignored.';
+    note.style.display = 'block';
+    document.getElementById('audioUrl').disabled = true;
+  } else {
+    note.style.display = 'none';
+    document.getElementById('audioUrl').disabled = false;
   }
 });
 </script>

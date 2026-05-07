@@ -14,6 +14,7 @@
 // All artifacts live under ./jobs/<jobId>/ and are kept until you wipe them.
 
 import express from 'express';
+import multer from 'multer';
 import fs from 'node:fs/promises';
 import { existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -37,6 +38,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3737;
 const JOBS_DIR = path.join(__dirname, 'jobs');
 await fs.mkdir(JOBS_DIR, { recursive: true });
+// Multer storage for uploaded audio files — saved straight into the new job dir
+// (we'll create a tmp dir up-front, the render handler moves files into the job dir)
+const UPLOAD_TMP = path.join(JOBS_DIR, '_uploads_tmp');
+await fs.mkdir(UPLOAD_TMP, { recursive: true });
+const upload = multer({
+  dest: UPLOAD_TMP,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+});
+
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -586,10 +596,14 @@ function runFFmpeg(jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioD
 // ───────────────────────────────────────────────────────────────
 // Main render endpoint
 // ───────────────────────────────────────────────────────────────
-app.post('/api/render', async (req, res) => {
+app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   const emit = makeEmitter(res);
 
-  const { photosUrl, audioUrl, text, options = {} } = req.body || {};
+  const { photosUrl, audioUrl, text } = req.body || {};
+  let options = req.body?.options || {};
+  if (typeof options === 'string') {
+    try { options = JSON.parse(options); } catch { options = {}; }
+  }
   const opts = {
     resolution: options.resolution === '720p' ? '1280x720' : '1920x1080',
     textPosition: options.textPosition || 'bottom', // 'bottom' | 'center'
@@ -599,7 +613,7 @@ app.post('/api/render', async (req, res) => {
 
   try {
     if (!photosUrl) throw new Error('Missing photos URL.');
-    if (!audioUrl) throw new Error('Missing audio URL.');
+    if (!audioUrl && !req.file) throw new Error('Provide either an audio file or a YouTube URL.');
     if (!text || !text.trim()) throw new Error('Missing text.');
 
     const jobId = randomUUID().slice(0, 8);
@@ -612,8 +626,18 @@ app.post('/api/render', async (req, res) => {
     const photoDir = path.join(jobDir, 'photos');
     const photoPaths = await downloadPhotos(photoUrls, photoDir, emit);
 
-    // 2. Audio
-    const audioPath = await downloadAudio(audioUrl, jobDir, emit);
+    // 2. Audio — uploaded file wins; otherwise fall back to yt-dlp
+    let audioPath;
+    if (req.file) {
+      // Move the uploaded MP3/WAV/etc into the job dir as music.<ext>
+      const ext = path.extname(req.file.originalname || '').toLowerCase() || '.mp3';
+      audioPath = path.join(jobDir, 'music' + ext);
+      await fs.rename(req.file.path, audioPath);
+      emit({ phase: 'audio', status: 'uploaded', filename: req.file.originalname });
+      emit({ phase: 'audio', status: 'done' });
+    } else {
+      audioPath = await downloadAudio(audioUrl, jobDir, emit);
+    }
     const audioDuration = await probeDuration(audioPath);
     emit({ phase: 'audio', status: 'duration', seconds: audioDuration });
 
