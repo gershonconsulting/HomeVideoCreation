@@ -1,0 +1,14 @@
+services:
+  souvenir:
+    build: .
+    container_name: souvenir
+    ports:
+      - "3737:3737"
+    environment:
+      # Liberation Serif is the closest Georgia substitute available in the
+      # base Debian image. On Mac/Windows native, omit and Georgia is used.
+      - FONT_NAME=Liberation Serif
+    volumes:
+      # Generated MP4s and intermediate files persist on the host
+      - ./jobs:/app/jobs
+    restart: unless-stopped

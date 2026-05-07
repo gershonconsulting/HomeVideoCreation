@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Souvenir</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #FAF7F2;
+    --cream-2: #F2EDE4;
+    --ink: #1A1714;
+    --ink-soft: #4A4138;
+    --terracotta: #B8543A;
+    --terracotta-deep: #8F3E2A;
+    --gold: #C89B5C;
+    --line: rgba(26, 23, 20, 0.12);
+    --ok: #2D6A4F;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      radial-gradient(circle at 12% 18%, rgba(184, 84, 58, 0.07) 0%, transparent 55%),
+      radial-gradient(circle at 88% 82%, rgba(200, 155, 92, 0.06) 0%, transparent 55%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    position: relative; z-index: 1;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 56px 40px 100px;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 24px;
+    margin-bottom: 44px;
+  }
+  .brand {
+    font-family: 'Instrument Serif', serif;
+    font-size: 44px;
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+  .brand em { color: var(--terracotta); font-style: italic; }
+  .tagline {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--ink-soft);
+  }
+
+  /* Field */
+  .field { margin-bottom: 32px; }
+  .field-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 8px;
+  }
+  .field-num {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 30px;
+    color: var(--terracotta);
+    line-height: 1;
+  }
+  .field-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    line-height: 1.1;
+  }
+  .field-help {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin: 0 0 12px 36px;
+  }
+
+  input[type="text"], input[type="url"], textarea {
+    width: 100%;
+    padding: 14px 18px;
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--ink);
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+  input:focus, textarea:focus {
+    outline: none;
+    border-color: var(--terracotta);
+    background: #fff;
+  }
+  textarea {
+    min-height: 240px;
+    resize: vertical;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* Settings */
+  .settings {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px 28px;
+    background: rgba(255, 255, 255, 0.45);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 22px 24px;
+  }
+  @media (max-width: 600px) { .settings { grid-template-columns: 1fr; } }
+
+  /* Secondary buttons (analyze, use lyrics) */
+  .audio-actions {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--terracotta);
+    border: 1px solid var(--terracotta);
+    border-radius: 4px;
+    padding: 9px 16px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  button.secondary:hover:not(:disabled) {
+    background: var(--terracotta);
+    color: var(--cream);
+  }
+  button.secondary:disabled {
+    opacity: 0.4; cursor: not-allowed;
+  }
+  button.ghost {
+    background: transparent;
+    color: var(--ink-soft);
+    border: none;
+    padding: 9px 4px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: rgba(74, 65, 56, 0.4);
+  }
+  button.ghost:hover { color: var(--ink); text-decoration-color: currentColor; }
+  .hint { font-size: 12px; color: var(--ink-soft); }
+
+  /* Song info card */
+  .song-card {
+    display: none;
+    margin-top: 18px;
+    padding: 22px 24px;
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--gold);
+    border-radius: 4px;
+  }
+  .song-card.show { display: block; }
+  .song-card.loading { opacity: 0.5; }
+  .song-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 18px;
+    margin-bottom: 14px;
+  }
+  .song-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px;
+    line-height: 1.15;
+    margin-bottom: 4px;
+  }
+  .song-meta {
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .song-confidence {
+    flex-shrink: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ok);
+    padding: 5px 10px;
+    background: rgba(45, 106, 79, 0.1);
+    border-radius: 999px;
+  }
+  .song-confidence.warning { color: #8a6500; background: rgba(200, 155, 92, 0.15); }
+  .song-confidence.miss { color: var(--ink-soft); background: rgba(26, 23, 20, 0.06); }
+  .song-suggestions {
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+    margin-bottom: 16px;
+  }
+  .song-suggestions-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--ink-soft);
+    margin-bottom: 8px;
+  }
+  .song-suggestions ul { list-style: none; padding: 0; }
+  .song-suggestions li {
+    font-family: 'Instrument Serif', serif;
+    font-size: 17px;
+    line-height: 1.5;
+  }
+  .song-suggestions li b {
+    color: var(--terracotta);
+    font-style: italic;
+    font-weight: normal;
+  }
+  .song-suggestions li .detail {
+    font-family: 'DM Sans', sans-serif;
+    font-style: normal;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+  .song-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .lyrics-preview {
+    display: none;
+    margin-top: 16px;
+    padding: 14px 18px;
+    background: var(--cream-2);
+    border-radius: 4px;
+    font-family: 'DM Sans', monospace, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    max-height: 280px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  .lyrics-preview.show { display: block; }
+
+  code {
+    background: rgba(184, 84, 58, 0.08);
+    color: var(--terracotta-deep);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.92em;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  .setting label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+  }
+  .setting select {
+    width: 100%;
+    padding: 10px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+
+  /* Action */
+  .action-bar { margin-top: 16px; }
+  button.go {
+    width: 100%;
+    padding: 22px 28px;
+    background: var(--ink);
+    color: var(--cream);
+    border: none;
+    border-radius: 4px;
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    font-style: italic;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  button.go:hover:not(:disabled) { background: var(--terracotta); }
+  button.go:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Status feed */
+  .status {
+    display: none;
+    margin-top: 24px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .status.show { display: block; }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .status-row:last-child { border-bottom: none; }
+  .status-row .icon {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    flex-shrink: 0;
+    background: rgba(26, 23, 20, 0.08);
+    color: var(--ink-soft);
+  }
+  .status-row.active .icon { background: var(--terracotta); color: white; }
+  .status-row.done .icon { background: var(--ok); color: white; }
+  .status-row.error .icon { background: #B53030; color: white; }
+  .status-row .label {
+    flex: 1;
+    font-family: 'Instrument Serif', serif;
+    font-size: 17px;
+  }
+  .status-row .detail {
+    color: var(--ink-soft);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* Progress bar */
+  .progress {
+    height: 2px;
+    background: rgba(26, 23, 20, 0.08);
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--terracotta);
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+
+  /* Result */
+  .result {
+    display: none;
+    margin-top: 24px;
+    padding: 28px;
+    background: var(--ink);
+    color: var(--cream);
+    border-radius: 4px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .result.show { display: flex; }
+  .result-msg {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    font-style: italic;
+    line-height: 1.2;
+  }
+  .result-msg span { color: var(--gold); }
+  .result-meta {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: rgba(250, 247, 242, 0.55);
+    margin-top: 6px;
+  }
+  .result a {
+    padding: 16px 26px;
+    background: var(--cream);
+    color: var(--ink);
+    text-decoration: none;
+    border-radius: 4px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    transition: background 0.2s ease;
+    white-space: nowrap;
+  }
+  .result a:hover { background: var(--gold); }
+
+  .error {
+    display: none;
+    margin-top: 24px;
+    padding: 18px 24px;
+    background: rgba(181, 48, 48, 0.08);
+    border-left: 3px solid #B53030;
+    border-radius: 2px;
+    font-size: 14px;
+    color: #6E1F1F;
+  }
+  .error.show { display: block; }
+  .error strong { font-family: 'Instrument Serif', serif; font-style: italic; }
+
+  footer {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <h1 class="brand">Souvenir<em>.</em></h1>
+    <div class="tagline">Personal Memory Films</div>
+  </header>
+
+  <!-- 1. Photos -->
+  <div class="field">
+    <div class="field-head">
+      <div class="field-num">i.</div>
+      <div class="field-title">Google Photos shared link</div>
+    </div>
+    <p class="field-help">From Google Photos: open the album → Share → Copy link. Paste it here.</p>
+    <input type="url" id="photosUrl" placeholder="https://photos.google.com/share/AF1Qip…">
+  </div>
+
+  <!-- 2. Audio -->
+  <div class="field">
+    <div class="field-head">
+      <div class="field-num">ii.</div>
+      <div class="field-title">YouTube link for the music</div>
+    </div>
+    <p class="field-help">Any YouTube URL — the audio track becomes the soundtrack and sets the film's length.</p>
+    <input type="url" id="audioUrl" placeholder="https://www.youtube.com/watch?v=…">
+    <div class="audio-actions">
+      <button class="secondary" id="analyzeBtn">Analyze song →</button>
+      <span class="hint" id="analyzeHint">Optional · finds synced lyrics + suggests how many photos</span>
+    </div>
+
+    <!-- Song info card (hidden until analyze succeeds) -->
+    <div class="song-card" id="songCard">
+      <div class="song-card-head">
+        <div>
+          <div class="song-title" id="songTitle">—</div>
+          <div class="song-meta" id="songMeta">—</div>
+        </div>
+        <div class="song-confidence" id="songConfidence"></div>
+      </div>
+
+      <div class="song-suggestions" id="songSuggestions"></div>
+
+      <div class="song-actions">
+        <button class="secondary" id="useLyricsBtn">Use synced lyrics as captions ↓</button>
+        <button class="ghost" id="showLyricsBtn">Show lyrics</button>
+      </div>
+
+      <pre class="lyrics-preview" id="lyricsPreview"></pre>
+    </div>
+  </div>
+
+  <!-- 3. Text -->
+  <div class="field">
+    <div class="field-head">
+      <div class="field-num">iii.</div>
+      <div class="field-title">Text on the pictures</div>
+    </div>
+    <p class="field-help">
+      Optional <code>[mm:ss]</code> at the start of a line pins it to that second.
+      Lines without timestamps split evenly. Mix freely — replace lyric lines with your own commentary at the same time codes.
+    </p>
+    <textarea id="text" placeholder="[00:08] Tu sais, je n'ai jamais été aussi heureux que ce matin-là
+[00:13] Nous marchions sur une plage un peu comme celle-ci
+
+— or, no timestamps and they spread evenly: —
+
+Tu sais, cela fait 13 ans maintenant que je suis ton plus grand fan.
+
+On a partagé des dizaines de milliers de photos comme celle-ci, de nous deux."></textarea>
+  </div>
+
+  <!-- Settings -->
+  <div class="field">
+    <div class="field-head">
+      <div class="field-num">iv.</div>
+      <div class="field-title">Settings</div>
+    </div>
+    <div class="settings">
+      <div class="setting">
+        <label>Resolution</label>
+        <select id="resolution">
+          <option value="1080p" selected>1080p — recommended</option>
+          <option value="720p">720p — faster render</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label>Text position</label>
+        <select id="textPosition">
+          <option value="bottom" selected>Bottom band</option>
+          <option value="center">Centered overlay</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label>Render speed</label>
+        <select id="preset">
+          <option value="fast">Fast — bigger file</option>
+          <option value="medium" selected>Balanced</option>
+          <option value="slow">Slow — smallest file</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label>Show text</label>
+        <select id="includeText">
+          <option value="true" selected>Yes — burn captions in</option>
+          <option value="false">No — silent visuals</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-bar">
+    <button class="go" id="goBtn">Render film →</button>
+  </div>
+
+  <div class="status" id="status">
+    <div class="status-row" id="row-photos">
+      <div class="icon">i</div>
+      <div class="label">Photos</div>
+      <div class="detail" id="detail-photos">Waiting</div>
+    </div>
+    <div class="progress" id="prog-photos"><div class="progress-bar" id="bar-photos"></div></div>
+
+    <div class="status-row" id="row-audio">
+      <div class="icon">ii</div>
+      <div class="label">Music</div>
+      <div class="detail" id="detail-audio">Waiting</div>
+    </div>
+    <div class="progress" id="prog-audio"><div class="progress-bar" id="bar-audio"></div></div>
+
+    <div class="status-row" id="row-render">
+      <div class="icon">iii</div>
+      <div class="label">Film</div>
+      <div class="detail" id="detail-render">Waiting</div>
+    </div>
+    <div class="progress" id="prog-render"><div class="progress-bar" id="bar-render"></div></div>
+  </div>
+
+  <div class="result" id="result">
+    <div>
+      <div class="result-msg">Your film is <span>ready</span>.</div>
+      <div class="result-meta" id="resultMeta"></div>
+    </div>
+    <a id="downloadLink" href="#" download>Download .mp4</a>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <footer>Local · Single-machine · No data leaves your computer</footer>
+
+</div>
+
+<script>
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const goBtn = $('goBtn');
+const statusEl = $('status');
+const resultEl = $('result');
+const errorEl = $('error');
+
+function setRow(phase, state, detailText, fraction) {
+  const row = $('row-' + phase);
+  if (!row) return;
+  row.classList.remove('active', 'done', 'error');
+  if (state) row.classList.add(state);
+  $('detail-' + phase).textContent = detailText || '';
+  if (typeof fraction === 'number') {
+    $('bar-' + phase).style.width = (Math.max(0, Math.min(1, fraction)) * 100) + '%';
+  }
+}
+
+function reset() {
+  errorEl.classList.remove('show');
+  errorEl.innerHTML = '';
+  resultEl.classList.remove('show');
+  statusEl.classList.add('show');
+  for (const phase of ['photos', 'audio', 'render']) {
+    setRow(phase, null, 'Waiting', 0);
+  }
+}
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  const ss = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${ss}`;
+}
+
+async function startRender() {
+  reset();
+  goBtn.disabled = true;
+  goBtn.textContent = 'Rendering…';
+
+  const body = {
+    photosUrl: $('photosUrl').value.trim(),
+    audioUrl: $('audioUrl').value.trim(),
+    text: $('text').value,
+    options: {
+      resolution: $('resolution').value,
+      textPosition: $('textPosition').value,
+      preset: $('preset').value,
+      includeText: $('includeText').value === 'true',
+    },
+  };
+
+  if (!body.photosUrl || !body.audioUrl || !body.text.trim()) {
+    showError('Fill in all three fields above before rendering.');
+    goBtn.disabled = false;
+    goBtn.textContent = 'Render film →';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) throw new Error('Server error: ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.trim()) handleEvent(JSON.parse(line));
+      }
+    }
+  } catch (err) {
+    showError(err.message || String(err));
+  } finally {
+    goBtn.disabled = false;
+    goBtn.textContent = 'Render film →';
+  }
+}
+
+function handleEvent(e) {
+  switch (e.phase) {
+    case 'init':
+      // job started
+      break;
+
+    case 'photos':
+      if (e.status === 'fetching') setRow('photos', 'active', 'Fetching album page', 0);
+      else if (e.status === 'found') setRow('photos', 'active', `Found ${e.count} photos`, 0);
+      else if (e.status === 'progress') {
+        setRow('photos', 'active', `${e.done} / ${e.total} downloaded`, e.done / e.total);
+      } else if (e.status === 'done') {
+        setRow('photos', 'done', `${e.count} photos ready`, 1);
+      }
+      break;
+
+    case 'audio':
+      if (e.status === 'fetching') setRow('audio', 'active', 'Extracting from YouTube', 0);
+      else if (e.status === 'progress') setRow('audio', 'active', `Downloading ${e.percent.toFixed(0)}%`, e.percent / 100);
+      else if (e.status === 'done') setRow('audio', 'done', 'Audio ready', 1);
+      else if (e.status === 'duration') {
+        const r = $('row-audio');
+        const cur = $('detail-audio').textContent;
+        $('detail-audio').textContent = cur + ' · ' + fmtTime(e.seconds);
+      }
+      break;
+
+    case 'plan':
+      // silent — info already in rows
+      break;
+
+    case 'render':
+      if (e.status === 'start') setRow('render', 'active', 'Encoding…', 0);
+      else if (e.status === 'progress') {
+        setRow('render', 'active',
+          `${fmtTime(e.current)} / ${fmtTime(e.total)}`,
+          e.fraction);
+      } else if (e.status === 'done') {
+        setRow('render', 'done', 'Encoded', 1);
+      }
+      break;
+
+    case 'complete':
+      $('downloadLink').href = e.downloadUrl;
+      $('downloadLink').download = `souvenir-${e.jobId}.mp4`;
+      $('resultMeta').textContent = `${e.sizeMB} MB · job ${e.jobId}`;
+      resultEl.classList.add('show');
+      break;
+
+    case 'error':
+      showError(e.message);
+      break;
+  }
+}
+
+function showError(msg) {
+  errorEl.innerHTML = '<strong>Couldn\'t render.</strong> ' + escapeHtml(msg);
+  errorEl.classList.add('show');
+  // Mark current active row as errored
+  document.querySelectorAll('.status-row.active').forEach(r => {
+    r.classList.remove('active');
+    r.classList.add('error');
+  });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+goBtn.addEventListener('click', startRender);
+
+// ───────── Analyze song ─────────
+const analyzeBtn = $('analyzeBtn');
+const songCard = $('songCard');
+const songTitleEl = $('songTitle');
+const songMetaEl = $('songMeta');
+const songConfEl = $('songConfidence');
+const songSuggEl = $('songSuggestions');
+const useLyricsBtn = $('useLyricsBtn');
+const showLyricsBtn = $('showLyricsBtn');
+const lyricsPreview = $('lyricsPreview');
+const analyzeHint = $('analyzeHint');
+
+let lastAnalysis = null;
+
+analyzeBtn.addEventListener('click', async () => {
+  const audioUrl = $('audioUrl').value.trim();
+  if (!audioUrl) {
+    analyzeHint.textContent = 'Paste a YouTube link first.';
+    return;
+  }
+  analyzeBtn.disabled = true;
+  analyzeBtn.textContent = 'Analyzing…';
+  analyzeHint.textContent = 'Fetching song info and looking up synced lyrics…';
+  songCard.classList.remove('show');
+
+  try {
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audioUrl }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    lastAnalysis = data;
+    renderSongCard(data);
+    analyzeHint.textContent = '';
+  } catch (err) {
+    analyzeHint.textContent = 'Couldn\'t analyze: ' + (err.message || err);
+  } finally {
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = 'Analyze song →';
+  }
+});
+
+function fmtMmSs(s) {
+  const m = Math.floor(s / 60);
+  const ss = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${ss}`;
+}
+
+function renderSongCard(data) {
+  const a = data.audio || {};
+  const lyrics = data.lyrics || {};
+  const title = (a.artist || a.track) ? `${a.artist || ''}${a.artist && a.track ? ' — ' : ''}${a.track || a.title || ''}` : (a.title || 'Unknown');
+  songTitleEl.textContent = title;
+  const metaParts = [fmtMmSs(a.duration || 0)];
+  if (lyrics.found) metaParts.push(`${lyrics.lineCount} lyric lines`);
+  if (lyrics.found && lyrics.synced) metaParts.push('synced ✓');
+  songMetaEl.textContent = metaParts.join(' · ');
+
+  // Confidence pill
+  if (lyrics.found && lyrics.confidence >= 0.9) {
+    songConfEl.textContent = 'Match';
+    songConfEl.className = 'song-confidence';
+  } else if (lyrics.found && lyrics.confidence >= 0.6) {
+    songConfEl.textContent = 'Best guess';
+    songConfEl.className = 'song-confidence warning';
+  } else if (lyrics.found) {
+    songConfEl.textContent = 'Loose match';
+    songConfEl.className = 'song-confidence warning';
+  } else {
+    songConfEl.textContent = 'No lyrics found';
+    songConfEl.className = 'song-confidence miss';
+  }
+
+  // Suggestions
+  const sug = data.suggestions || [];
+  songSuggEl.innerHTML = '<div class="song-suggestions-label">Recommended photo count</div><ul>' +
+    sug.map((s) => `<li><b>${s.count}</b> — ${s.label} <span class="detail">(${s.perPhoto}s per photo)</span></li>`).join('') +
+    '</ul>';
+
+  // Buttons
+  useLyricsBtn.disabled = !(lyrics.found && lyrics.synced);
+  useLyricsBtn.textContent = lyrics.found && lyrics.synced
+    ? 'Use synced lyrics as captions ↓'
+    : 'No synced lyrics to insert';
+  showLyricsBtn.style.display = (lyrics.found && lyrics.lines && lyrics.lines.length) ? '' : 'none';
+  lyricsPreview.classList.remove('show');
+
+  songCard.classList.add('show');
+}
+
+useLyricsBtn.addEventListener('click', () => {
+  if (!lastAnalysis || !lastAnalysis.lyrics || !lastAnalysis.lyrics.lines) return;
+  const lines = lastAnalysis.lyrics.lines;
+  const formatted = lines
+    .map((l) => `[${fmtMmSs(l.time)}] ${l.text}`)
+    .join('\n');
+  const ta = $('text');
+  if (ta.value.trim() && !confirm('Replace existing text with synced lyrics?')) return;
+  ta.value = formatted;
+  ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+showLyricsBtn.addEventListener('click', () => {
+  if (!lastAnalysis || !lastAnalysis.lyrics || !lastAnalysis.lyrics.lines) return;
+  if (lyricsPreview.classList.contains('show')) {
+    lyricsPreview.classList.remove('show');
+    showLyricsBtn.textContent = 'Show lyrics';
+  } else {
+    lyricsPreview.textContent = lastAnalysis.lyrics.lines
+      .map((l) => `[${fmtMmSs(l.time)}] ${l.text}`)
+      .join('\n');
+    lyricsPreview.classList.add('show');
+    showLyricsBtn.textContent = 'Hide lyrics';
+  }
+});
+
+// Cmd/Ctrl+Enter to submit
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (!goBtn.disabled) startRender();
+  }
+});
+</script>
+</body>
+</html>

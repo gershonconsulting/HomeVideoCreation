@@ -1,0 +1,29 @@
+{
+  "name": "Souvenir POC",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11",
+      "installTools": false
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "forwardPorts": [3737],
+  "portsAttributes": {
+    "3737": {
+      "label": "Souvenir UI",
+      "onAutoForward": "openPreview",
+      "visibility": "private"
+    }
+  },
+  "containerEnv": {
+    "FONT_NAME": "Liberation Serif",
+    "PORT": "3737"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  },
+  "remoteUser": "node"
+}
