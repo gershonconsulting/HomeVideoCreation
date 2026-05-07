@@ -1,0 +1,17 @@
+# Render Blueprint — defines Souvenir as a Web Service (NOT a Static Site)
+# Used by render.com/deploy and Render Blueprints. The Dockerfile in the
+# repo root is what actually builds the runtime; this file just tells Render
+# how to wire it up.
+services:
+  - type: web
+    name: souvenir
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: FONT_NAME
+        value: Liberation Serif

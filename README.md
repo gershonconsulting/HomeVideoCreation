@@ -2,6 +2,11 @@
 
 Personal memory-film maker. Paste three things — a Google Photos shared link, a YouTube link, and your text — get an MP4 back.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/gershonconsulting/HomeVideoCreation)
+
+*One-click Web-Service deploy. Do not pick "Static Site" — Souvenir needs a server runtime (Docker + Node + ffmpeg + yt-dlp).*
+
+
 ---
 
 ## Setup — pick one
