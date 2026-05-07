@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 //  - user-agent — present as a real Chrome browser, not python-requests
 //  - js-runtimes — silence the "no JS runtime" warning by pointing at /usr/bin/node
 const YT_DLP_BASE_FLAGS = [
-  '--extractor-args', 'youtube:player_client=android,web,mweb',
+  '--extractor-args', 'youtube:player_client=tv_embedded,android_vr,android_creator,ios,mweb,android,web_safari',
   '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   '--js-runtimes', 'node:/usr/bin/node',
   '--no-warnings',
