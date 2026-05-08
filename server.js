@@ -565,8 +565,13 @@ function parseTextToCaptions(text, audioDuration) {
       .filter((c) => c.text.length > 0 && c.end > c.start);
   }
 
-  // No timestamps — even distribution by paragraph
-  const segments = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  // No timestamps — split on every non-empty line so a caption stays short.
+  // (Previously split only on blank-line paragraphs, which let one giant
+  // multi-line block sit on screen for the entire song.)
+  const segments = text
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (segments.length === 0) return [];
   const segDur = audioDuration / segments.length;
   return segments.map((text, i) => ({
@@ -608,18 +613,24 @@ function runFFmpeg(jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioD
     // Font: Georgia is on every Mac/Windows. Linux/Docker may not have it —
     // override via FONT_NAME env var (docker-compose sets it to "Liberation Serif").
     const fontName = process.env.FONT_NAME || 'Georgia';
+    // Subtitle styling tuned for 720p — smaller font + tighter box + per-resolution scaling
+    // (ffmpeg's subtitles filter renders the ASS at the playback resolution; sizes here
+    //  are in pixels of the output video.)
+    const fontSize = H >= 1080 ? 28 : H >= 900 ? 24 : 18;
+    const outlineW = H >= 1080 ? 3 : 2;
+    const marginV  = options.textPosition === 'center' ? 0 : (H >= 1080 ? 60 : 40);
     const subStyle = [
       `Fontname=${fontName}`,
-      `Fontsize=22`,
+      `Fontsize=${fontSize}`,
       `PrimaryColour=&H00F2F7FA&`,
       `BorderStyle=3`,
       `BackColour=&H99000000&`, // 0x99 = ~60% opaque black band
-      `Outline=4`,
+      `Outline=${outlineW}`,
       `Shadow=0`,
       `Alignment=${options.textPosition === 'center' ? 5 : 2}`,
-      `MarginV=${options.textPosition === 'center' ? 0 : 60}`,
-      `MarginL=80`,
-      `MarginR=80`,
+      `MarginV=${marginV}`,
+      `MarginL=${H >= 1080 ? 100 : 60}`,
+      `MarginR=${H >= 1080 ? 100 : 60}`,
     ].join(',');
 
     const subFilter = `subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subStyle}'`;
