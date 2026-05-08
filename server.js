@@ -660,12 +660,17 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     );
 
     const stat = await fs.stat(outputPath);
+    // Stream the MP4 inline as base64 so the browser receives it within the
+    // same active HTTP response. Free-tier hosts (Render) wipe ephemeral disks
+    // after idle, so we can't rely on a follow-up GET /api/file/:jobId.
+    const mp4Buf = await fs.readFile(outputPath);
     emit({
       phase: 'complete',
       jobId,
       downloadUrl: `/api/file/${jobId}`,
       sizeBytes: stat.size,
       sizeMB: +(stat.size / (1024 * 1024)).toFixed(1),
+      mp4Base64: mp4Buf.toString('base64'),
     });
     res.end();
   } catch (err) {

@@ -745,12 +745,28 @@ function handleEvent(e) {
       }
       break;
 
-    case 'complete':
-      $('downloadLink').href = e.downloadUrl;
-      $('downloadLink').download = `souvenir-${e.jobId}.mp4`;
+    case 'complete': {
+      // The MP4 is delivered inline as base64 to survive Render free-tier
+      // disk eviction. Decode it here, turn into a Blob, point the link at
+      // a blob:// URL, and auto-trigger the download immediately.
+      let blobUrl = e.downloadUrl; // server-disk fallback
+      if (e.mp4Base64) {
+        const bin = atob(e.mp4Base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'video/mp4' });
+        blobUrl = URL.createObjectURL(blob);
+      }
+      const a = $('downloadLink');
+      a.href = blobUrl;
+      a.download = `souvenir-${e.jobId}.mp4`;
       $('resultMeta').textContent = `${e.sizeMB} MB · job ${e.jobId}`;
       resultEl.classList.add('show');
+      // Auto-trigger so the user doesn't have to click while the disk still has the file
+      // (the blob is in-memory now, so this is just convenience)
+      try { a.click(); } catch {}
       break;
+    }
 
     case 'error':
       showError(e.message);
