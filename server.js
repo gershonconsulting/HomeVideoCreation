@@ -328,6 +328,100 @@ function confidenceFor(match, targetDuration) {
   return 0.4;
 }
 
+// MP3-based analyzer: probe duration via ffprobe, count photos at the
+// Google Photos URL, suggest target photo counts, optionally try LRCLIB
+// from filename ("Artist - Title.mp3").
+async function analyzeFromFile(audioFilePath, photosUrl, originalFilename) {
+  const noop = () => {};
+
+  // Run duration probe and album scrape in parallel
+  const [duration, photoUrls] = await Promise.all([
+    probeDuration(audioFilePath).catch(() => 0),
+    scrapeGooglePhotos(photosUrl, noop).catch(() => []),
+  ]);
+
+  const photosFound = photoUrls.length;
+
+  // Try to extract Artist - Title from filename for bonus LRCLIB sync
+  let parsedArtist = '', parsedTitle = '';
+  if (originalFilename) {
+    const stripped = originalFilename
+      .replace(/\.[a-z0-9]+$/i, '')        // drop extension
+      .replace(/\([^)]*\)/g, '')          // drop "(ParolesLyrics)" etc
+      .replace(/\[[^\]]*\]/g, '')        // drop "[...]"
+      .replace(/\s+/g, ' ')                // collapse whitespace
+      .trim();
+    const m = stripped.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+    if (m) { parsedArtist = m[1].trim(); parsedTitle = m[2].trim(); }
+  }
+
+  // Optional lyrics lookup — non-fatal
+  let lyrics = null, lyricLines = [];
+  if (parsedArtist && parsedTitle && duration > 0) {
+    try {
+      lyrics = await fetchLyricsFromLrclib(parsedArtist, parsedTitle, duration);
+      if (!lyrics) lyrics = await fetchLyricsFromLrclib(parsedTitle, parsedArtist, duration);
+      if (lyrics && lyrics.syncedLyrics) {
+        lyricLines = parseLrcLines(lyrics.syncedLyrics).filter(l => l.text.length > 0);
+      }
+    } catch {}
+  }
+
+  // Build photo-count suggestions:
+  //  - cinematic (slow): 8-10s/photo
+  //  - balanced (default): ~6s/photo
+  //  - montage (fast):    ~3s/photo
+  // Also include a "lyric-aligned" option if we have synced lyrics.
+  const dur = duration || 240;
+  const suggestions = [];
+  for (const [sec, label] of [[10, 'cinematic · 1 photo every 10s'],
+                              [6,  'balanced · 1 photo every 6s'],
+                              [3,  'montage · 1 photo every 3s']]) {
+    const count = Math.max(1, Math.round(dur / sec));
+    suggestions.push({ count, perPhoto: sec, label });
+  }
+  if (lyricLines.length > 0) {
+    suggestions.unshift({
+      count: lyricLines.length,
+      perPhoto: +(dur / lyricLines.length).toFixed(1),
+      label: `lyric-synced · 1 photo per lyric line (${lyricLines.length} lines)`,
+    });
+  }
+
+  // Recommended = balanced (6s/photo)
+  const recommended = Math.max(1, Math.round(dur / 6));
+  const trim = photosFound > recommended ? photosFound - recommended : 0;
+  const add  = photosFound > 0 && photosFound < Math.max(1, Math.round(dur / 12)) ? Math.round(dur / 6) - photosFound : 0;
+
+  return {
+    audio: {
+      filename: originalFilename || '',
+      duration,
+      parsedArtist, parsedTitle,
+    },
+    photos: {
+      found: photosFound,
+      recommended,
+      trim,
+      add,
+      perPhotoIfKept: photosFound > 0 ? +(dur / photosFound).toFixed(1) : 0,
+    },
+    suggestions,
+    lyrics: lyrics ? {
+      found: true,
+      synced: !!lyrics.syncedLyrics,
+      source: lyrics.source,
+      confidence: lyrics.confidence,
+      matchedArtist: lyrics.matchedArtist,
+      matchedTrack: lyrics.matchedTrack,
+      matchedDuration: lyrics.matchedDuration,
+      lineCount: lyricLines.length,
+      lines: lyricLines,
+      syncedLyricsRaw: lyrics.syncedLyrics,
+    } : { found: false },
+  };
+}
+
 async function analyzeSong(youtubeUrl) {
   const meta = await ytdlpMetadata(youtubeUrl);
 
@@ -683,10 +777,23 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 // ───────────────────────────────────────────────────────────────
 // Song analysis endpoint — fast (no audio download)
 // ───────────────────────────────────────────────────────────────
-app.post('/api/analyze', async (req, res) => {
+app.post('/api/analyze', upload.single('audioFile'), async (req, res) => {
   try {
-    const { audioUrl } = req.body || {};
-    if (!audioUrl) return res.status(400).json({ error: 'Missing audioUrl' });
+    const { audioUrl, photosUrl } = req.body || {};
+
+    // Path A: file uploaded — primary mode now (Render can't reach YouTube)
+    if (req.file) {
+      if (!photosUrl) {
+        return res.status(400).json({ error: 'Provide a Google Photos shared URL alongside the audio file.' });
+      }
+      const result = await analyzeFromFile(req.file.path, photosUrl, req.file.originalname);
+      // tidy up the temp file (analyze doesn't need to keep it)
+      try { await fs.unlink(req.file.path); } catch {}
+      return res.json(result);
+    }
+
+    // Path B: legacy URL-only (Codespaces / local where yt-dlp works)
+    if (!audioUrl) return res.status(400).json({ error: 'Provide an audio file (and photos URL) — or a YouTube URL for local use.' });
     const result = await analyzeSong(audioUrl);
     res.json(result);
   } catch (err) {

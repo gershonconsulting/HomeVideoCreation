@@ -466,19 +466,16 @@
   <div class="field">
     <div class="field-head">
       <div class="field-num">ii.</div>
-      <div class="field-title">YouTube link for the music</div>
+      <div class="field-title">Music for the film</div>
     </div>
-    <p class="field-help">Any YouTube URL — the audio track becomes the soundtrack and sets the film's length.</p>
-    <input type="url" id="audioUrl" placeholder="https://www.youtube.com/watch?v=…">
-    <div class="upload-divider">— or —</div>
+    <p class="field-help">Upload an MP3 / WAV / M4A — the audio track becomes the soundtrack and sets the film's length.</p>
     <label class="upload-label">
-      Upload an MP3 / WAV / M4A directly
       <input type="file" id="audioFile" accept="audio/*">
     </label>
     <div id="audioFileChosen" class="hint" style="display:none"></div>
     <div class="audio-actions">
-      <button class="secondary" id="analyzeBtn">Analyze song →</button>
-      <span class="hint" id="analyzeHint">Optional · finds synced lyrics + suggests how many photos</span>
+      <button class="secondary" id="analyzeBtn">Analyze →</button>
+      <span class="hint" id="analyzeHint">Optional · counts photos in your album, suggests an ideal photo count, finds synced lyrics if available</span>
     </div>
 
     <!-- Song info card (hidden until analyze succeeds) -->
@@ -644,7 +641,6 @@ async function startRender() {
   goBtn.textContent = 'Rendering…';
 
   const photosUrl = $('photosUrl').value.trim();
-  const audioUrl  = $('audioUrl').value.trim();
   const audioFile = $('audioFile').files[0];
   const text      = $('text').value;
   const options = {
@@ -654,30 +650,21 @@ async function startRender() {
     includeText: $('includeText').value === 'true',
   };
 
-  if (!photosUrl || (!audioUrl && !audioFile) || !text.trim()) {
-    showError('Need photos URL, an MP3 (uploaded or YouTube), and text.');
+  if (!photosUrl || !audioFile || !text.trim()) {
+    showError('Need a Google Photos URL, an audio file, and the captions text.');
     goBtn.disabled = false;
     goBtn.textContent = 'Render film →';
     return;
   }
 
-  // If user uploaded a file, send multipart; otherwise JSON.
   let res;
   try {
-    if (audioFile) {
-      const fd = new FormData();
-      fd.append('photosUrl', photosUrl);
-      fd.append('text', text);
-      fd.append('options', JSON.stringify(options));
-      fd.append('audioFile', audioFile);
-      res = await fetch('/api/render', { method: 'POST', body: fd });
-    } else {
-      res = await fetch('/api/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ photosUrl, audioUrl, text, options }),
-      });
-    }
+    const fd = new FormData();
+    fd.append('photosUrl', photosUrl);
+    fd.append('text', text);
+    fd.append('options', JSON.stringify(options));
+    fd.append('audioFile', audioFile);
+    res = await fetch('/api/render', { method: 'POST', body: fd });
     if (!res.ok || !res.body) throw new Error('Server error: ' + res.status);
 
     const reader = res.body.getReader();
@@ -807,22 +794,26 @@ const analyzeHint = $('analyzeHint');
 let lastAnalysis = null;
 
 analyzeBtn.addEventListener('click', async () => {
-  const audioUrl = $('audioUrl').value.trim();
-  if (!audioUrl) {
-    analyzeHint.textContent = 'Paste a YouTube link first.';
+  const audioFile = $('audioFile').files[0];
+  const photosUrl = $('photosUrl').value.trim();
+  if (!audioFile) {
+    analyzeHint.textContent = 'Pick an audio file first.';
+    return;
+  }
+  if (!photosUrl) {
+    analyzeHint.textContent = 'Paste your Google Photos URL above first — analyze counts the photos in your album.';
     return;
   }
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = 'Analyzing…';
-  analyzeHint.textContent = 'Fetching song info and looking up synced lyrics…';
+  analyzeHint.textContent = 'Reading audio duration and counting photos in the album…';
   songCard.classList.remove('show');
 
   try {
-    const r = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ audioUrl }),
-    });
+    const fd = new FormData();
+    fd.append('audioFile', audioFile);
+    fd.append('photosUrl', photosUrl);
+    const r = await fetch('/api/analyze', { method: 'POST', body: fd });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.error || `HTTP ${r.status}`);
@@ -835,7 +826,7 @@ analyzeBtn.addEventListener('click', async () => {
     analyzeHint.textContent = 'Couldn\'t analyze: ' + (err.message || err);
   } finally {
     analyzeBtn.disabled = false;
-    analyzeBtn.textContent = 'Analyze song →';
+    analyzeBtn.textContent = 'Analyze →';
   }
 });
 
@@ -847,40 +838,69 @@ function fmtMmSs(s) {
 
 function renderSongCard(data) {
   const a = data.audio || {};
+  const photos = data.photos || {};
   const lyrics = data.lyrics || {};
-  const title = (a.artist || a.track) ? `${a.artist || ''}${a.artist && a.track ? ' — ' : ''}${a.track || a.title || ''}` : (a.title || 'Unknown');
+
+  // Title row: prefer parsedArtist/Title, fall back to filename
+  const title = (a.parsedArtist && a.parsedTitle)
+    ? `${a.parsedArtist} — ${a.parsedTitle}`
+    : (a.filename || 'Audio file');
   songTitleEl.textContent = title;
+
   const metaParts = [fmtMmSs(a.duration || 0)];
-  if (lyrics.found) metaParts.push(`${lyrics.lineCount} lyric lines`);
-  if (lyrics.found && lyrics.synced) metaParts.push('synced ✓');
+  if (photos.found != null) metaParts.push(`${photos.found} photo${photos.found===1?'':'s'} in album`);
+  if (lyrics.found && lyrics.synced) metaParts.push(`${lyrics.lineCount} lyric lines · synced ✓`);
   songMetaEl.textContent = metaParts.join(' · ');
 
-  // Confidence pill
-  if (lyrics.found && lyrics.confidence >= 0.9) {
-    songConfEl.textContent = 'Match';
+  // Confidence pill — recommend trim/keep state
+  if (photos.found > 0 && photos.trim > 0) {
+    songConfEl.textContent = `Trim ${photos.trim}`;
+    songConfEl.className = 'song-confidence warning';
+  } else if (photos.found > 0 && photos.add > 0) {
+    songConfEl.textContent = `Add ${photos.add}`;
+    songConfEl.className = 'song-confidence warning';
+  } else if (photos.found > 0) {
+    songConfEl.textContent = 'Photo count OK';
     songConfEl.className = 'song-confidence';
-  } else if (lyrics.found && lyrics.confidence >= 0.6) {
-    songConfEl.textContent = 'Best guess';
-    songConfEl.className = 'song-confidence warning';
-  } else if (lyrics.found) {
-    songConfEl.textContent = 'Loose match';
-    songConfEl.className = 'song-confidence warning';
   } else {
-    songConfEl.textContent = 'No lyrics found';
+    songConfEl.textContent = '—';
     songConfEl.className = 'song-confidence miss';
   }
 
-  // Suggestions
+  // Build suggestions list. Highlight the one closest to the album's actual count.
   const sug = data.suggestions || [];
-  songSuggEl.innerHTML = '<div class="song-suggestions-label">Recommended photo count</div><ul>' +
-    sug.map((s) => `<li><b>${s.count}</b> — ${s.label} <span class="detail">(${s.perPhoto}s per photo)</span></li>`).join('') +
-    '</ul>';
+  const closestIdx = (() => {
+    if (!photos.found) return -1;
+    let best = 0, bestDiff = Infinity;
+    sug.forEach((s, i) => {
+      const d = Math.abs(s.count - photos.found);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    });
+    return best;
+  })();
+
+  let html = '';
+  if (photos.found > 0) {
+    if (photos.trim > 0) {
+      html += `<div class="song-suggestions-label">Your album has <b>${photos.found}</b> photos for a <b>${fmtMmSs(a.duration || 0)}</b> song — that's <b>${photos.perPhotoIfKept}s</b> per photo. Consider trimming to ~<b>${photos.recommended}</b> photos for a balanced pace.</div>`;
+    } else if (photos.add > 0) {
+      html += `<div class="song-suggestions-label">Your album has <b>${photos.found}</b> photos for a <b>${fmtMmSs(a.duration || 0)}</b> song — feels sparse at <b>${photos.perPhotoIfKept}s</b> per photo. ${photos.recommended} would feel balanced.</div>`;
+    } else {
+      html += `<div class="song-suggestions-label"><b>${photos.found}</b> photos for a <b>${fmtMmSs(a.duration || 0)}</b> song — that's <b>${photos.perPhotoIfKept}s</b> per photo. Good rhythm.</div>`;
+    }
+  }
+  html += '<div class="song-suggestions-label" style="margin-top:8px">Other pacing options:</div><ul>' +
+    sug.map((s, i) => {
+      const isClosest = i === closestIdx;
+      return `<li${isClosest ? ' style="font-weight:600"' : ''}><b>${s.count}</b> photos — ${s.label} <span class="detail">(${s.perPhoto}s per photo)${isClosest ? ' ← closest to your album' : ''}</span></li>`;
+    }).join('') + '</ul>';
+  songSuggEl.innerHTML = html;
 
   // Buttons
   useLyricsBtn.disabled = !(lyrics.found && lyrics.synced);
   useLyricsBtn.textContent = lyrics.found && lyrics.synced
     ? 'Use synced lyrics as captions ↓'
-    : 'No synced lyrics to insert';
+    : 'No synced lyrics found for this file';
   showLyricsBtn.style.display = (lyrics.found && lyrics.lines && lyrics.lines.length) ? '' : 'none';
   lyricsPreview.classList.remove('show');
 
@@ -920,17 +940,15 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Show the user the chosen audio filename + clear the URL field if they picked a file
+// Show the chosen audio filename
 document.getElementById('audioFile').addEventListener('change', function(){
   const f = this.files[0];
   const note = document.getElementById('audioFileChosen');
   if (f) {
-    note.textContent = 'Selected: ' + f.name + ' (' + (f.size/1024/1024).toFixed(1) + ' MB) — YouTube URL will be ignored.';
+    note.textContent = 'Selected: ' + f.name + ' (' + (f.size/1024/1024).toFixed(1) + ' MB)';
     note.style.display = 'block';
-    document.getElementById('audioUrl').disabled = true;
   } else {
     note.style.display = 'none';
-    document.getElementById('audioUrl').disabled = false;
   }
 });
 </script>
