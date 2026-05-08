@@ -95,7 +95,7 @@ async function scrapeGooglePhotos(shareUrl, emit) {
   }
 
   emit({ phase: 'photos', status: 'found', count: baseUrls.length });
-  return baseUrls.map((u) => u + '=w2048');
+  return baseUrls.map((u) => u + '=w1280');
 }
 
 async function downloadPhotos(urls, dir, emit) {
@@ -553,8 +553,9 @@ function runFFmpeg(jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioD
       '-vf', vf,
       '-map', '0:v',
       '-map', '1:a',
+      '-threads', '1',
       '-c:v', 'libx264',
-      '-preset', options.preset || 'medium',
+      '-preset', options.preset || 'veryfast',
       '-crf', '22',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
@@ -605,10 +606,10 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     try { options = JSON.parse(options); } catch { options = {}; }
   }
   const opts = {
-    resolution: options.resolution === '720p' ? '1280x720' : '1920x1080',
+    resolution: options.resolution === '1080p' ? '1920x1080' : '1280x720',
     textPosition: options.textPosition || 'bottom', // 'bottom' | 'center'
     includeText: options.includeText !== false,
-    preset: options.preset || 'medium',
+    preset: options.preset || 'veryfast',
   };
 
   try {
