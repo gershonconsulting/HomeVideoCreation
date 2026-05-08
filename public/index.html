@@ -577,7 +577,15 @@ On a partagé des dizaines de milliers de photos comme celle-ci, de nous deux.">
     </div>
     <div class="progress" id="prog-audio"><div class="progress-bar" id="bar-audio"></div></div>
 
-    <div class="status-row" id="row-render">
+    <div class="status-row" id="row-beat">
+        <div class="status-icon"><span class="num">⌬</span></div>
+        <div class="status-body">
+          <div class="status-label">Beat</div>
+          <div class="status-detail" id="detail-beat">Waiting</div>
+        </div>
+        <div class="status-progress"><div class="status-progress-bar"></div></div>
+      </div>
+      <div class="status-row" id="row-render">
       <div class="icon">iii</div>
       <div class="label">Film</div>
       <div class="detail" id="detail-render">Waiting</div>
@@ -719,6 +727,20 @@ function handleEvent(e) {
 
     case 'plan':
       // silent — info already in rows
+      break;
+
+    case 'beat':
+      if (e.status === 'analyzing') setRow('beat', 'active', 'Analyzing tempo (aubio)…', 0.5);
+      else if (e.status === 'detected') setRow('beat', 'done', `${e.bpm} BPM · ${e.beats} beats`, 1);
+      else if (e.status === 'fallback') setRow('beat', 'done', 'No clear beat — using even spacing', 1);
+      break;
+
+    case 'plan':
+      // Show whether we ended up beat-synced or not
+      if (e.mode && e.mode !== 'even') {
+        const r = $('detail-beat');
+        if (r) r.textContent = e.mode;
+      }
       break;
 
     case 'render':

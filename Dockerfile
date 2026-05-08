@@ -11,6 +11,7 @@ RUN apt-get update && \
       python3 python3-pip \
       ca-certificates \
       fonts-liberation fonts-dejavu \
+      aubio-tools \
     && pip3 install --break-system-packages --no-cache-dir -U yt-dlp \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

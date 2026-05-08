@@ -581,10 +581,7 @@ function parseTextToCaptions(text, audioDuration) {
   }));
 }
 
-async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration) {
-  // For the framerate-input approach we just need the per-photo duration.
-  const perPhotoSec = audioDuration / photoPaths.length;
-
+async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audioPath, emit) {
   // captions.srt — built from parsed captions (timed or evenly distributed)
   const captions = parseTextToCaptions(text, audioDuration);
   let srt = '';
@@ -595,14 +592,97 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration) {
   const srtPath = path.join(jobDir, 'captions.srt');
   await fs.writeFile(srtPath, srt);
 
-  // Photo input pattern - all photos are named photo_NNNN.jpg in photoDir
-  const photoDir = path.dirname(photoPaths[0]);
-  const photoPattern = path.join(photoDir, 'photo_%04d.jpg');
+  // Try to beat-sync the photo transitions. Fall back to even spacing if aubio
+  // can't analyze the audio (rare formats, very short clips, etc).
+  emit && emit({ phase: 'beat', status: 'analyzing' });
+  const beatResult = audioPath ? await detectBeats(audioPath) : null;
 
-  return { photoPattern, srtPath, perPhotoSec, captionCount: captions.length };
+  // Compute per-photo transition timestamps. transitionTimes[i] = when photo i
+  // STARTS being shown. Last entry is audioDuration (= when last photo ends).
+  let transitionTimes;
+  let mode;
+  let bpm = null;
+  if (beatResult && beatResult.beats.length >= photoPaths.length) {
+    bpm = beatResult.bpm;
+    const beats = beatResult.beats;
+    // Spread photoPaths.length transitions evenly across the beat timeline,
+    // snapping each to the nearest actual beat. The first photo starts at 0
+    // (or beats[0] if you want the very first beat to land too); we use 0.
+    transitionTimes = [0];
+    for (let i = 1; i < photoPaths.length; i++) {
+      const beatIdx = Math.round((i / photoPaths.length) * beats.length);
+      transitionTimes.push(beats[Math.min(beatIdx, beats.length - 1)]);
+    }
+    transitionTimes.push(audioDuration);
+    mode = `beat-synced (${bpm} BPM, ${beats.length} beats)`;
+    emit && emit({ phase: 'beat', status: 'detected', bpm, beats: beats.length });
+  } else {
+    const perPhotoSec = audioDuration / photoPaths.length;
+    transitionTimes = [];
+    for (let i = 0; i < photoPaths.length; i++) transitionTimes.push(i * perPhotoSec);
+    transitionTimes.push(audioDuration);
+    mode = 'even';
+    emit && emit({ phase: 'beat', status: 'fallback' });
+  }
+
+  // Build ffconcat playlist with explicit per-photo durations.
+  // Last entry needs special handling: the concat demuxer drops the last
+  // file's duration unless we repeat the last file (yes, really).
+  const concatLines = ['ffconcat version 1.0'];
+  for (let i = 0; i < photoPaths.length; i++) {
+    const dur = transitionTimes[i + 1] - transitionTimes[i];
+    concatLines.push(`file '${photoPaths[i]}'`);
+    concatLines.push(`duration ${dur.toFixed(4)}`);
+  }
+  // Repeat the last file so its duration is honored
+  concatLines.push(`file '${photoPaths[photoPaths.length - 1]}'`);
+  const concatPath = path.join(jobDir, 'photos.concat');
+  await fs.writeFile(concatPath, concatLines.join('\n'));
+
+  return {
+    concatPath,
+    srtPath,
+    captionCount: captions.length,
+    mode,
+    bpm,
+  };
 }
 
-function runFFmpeg(jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioDuration, options, emit) {
+// Beat detection — runs aubio's "beat" tracker against the audio file and
+// returns an array of beat times in seconds. Falls back to null on failure;
+// callers should then use even-spaced photo timing.
+function detectBeats(audioPath) {
+  return new Promise((resolve) => {
+    // `aubio beat` writes one beat-time per line to stdout. -B 1024 -H 256 are
+    // the default analysis windows; tweaking these doesn't change beats much.
+    const proc = spawn('aubio', ['beat', audioPath]);
+    let out = '', err = '';
+    proc.stdout.on('data', (c) => (out += c.toString()));
+    proc.stderr.on('data', (c) => (err += c.toString()));
+    proc.on('error', () => resolve(null));
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        console.warn('[beat] aubio exited', code, err.slice(0, 200));
+        return resolve(null);
+      }
+      const beats = out.split(/\r?\n/).map(parseFloat).filter((n) => !isNaN(n) && n > 0);
+      if (beats.length < 8) {
+        console.warn('[beat] only', beats.length, 'beats — falling back to even spacing');
+        return resolve(null);
+      }
+      // Compute median BPM for logging
+      const intervals = [];
+      for (let i = 1; i < beats.length; i++) intervals.push(beats[i] - beats[i - 1]);
+      intervals.sort((a, b) => a - b);
+      const medianInterval = intervals[Math.floor(intervals.length / 2)];
+      const bpm = Math.round(60 / medianInterval);
+      console.log(`[beat] detected ${beats.length} beats, ~${bpm} BPM`);
+      resolve({ beats, bpm });
+    });
+  });
+}
+
+function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, options, emit) {
   return new Promise((resolve, reject) => {
     const outputPath = path.join(jobDir, 'output.mp4');
     const [W, H] = options.resolution.split('x').map(Number);
@@ -651,9 +731,11 @@ function runFFmpeg(jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioD
       '-y',
       '-loglevel', 'info',
       '-progress', 'pipe:2',  // progress info to stderr
-      // Slideshow: framerate input, each image gets perPhotoSec seconds
-      '-framerate', `1/${perPhotoSec.toFixed(6)}`,
-      '-i', photoPattern,
+      // Slideshow: concat demuxer with explicit per-photo durations (so we can
+      //   beat-sync). 'safe 0' lets us reference absolute paths.
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatPath,
       '-i', audioPath,
       '-vf', vf,
       '-map', '0:v',
@@ -748,20 +830,21 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     emit({ phase: 'audio', status: 'duration', seconds: audioDuration });
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
-    const { photoPattern, srtPath, perPhotoSec, captionCount } = await buildVideoArtifacts(
-      jobDir, photoPaths, text, audioDuration
+    const { concatPath, srtPath, captionCount, mode, bpm } = await buildVideoArtifacts(
+      jobDir, photoPaths, text, audioDuration, audioPath, emit
     );
     emit({
       phase: 'plan',
       photos: photoPaths.length,
       captions: captionCount,
       audioDuration,
-      perPhotoSec,
+      mode,
+      bpm,
     });
 
     // 4. Render
     const outputPath = await runFFmpeg(
-      jobDir, photoPattern, perPhotoSec, srtPath, audioPath, audioDuration, opts, emit
+      jobDir, concatPath, srtPath, audioPath, audioDuration, opts, emit
     );
 
     const stat = await fs.stat(outputPath);
