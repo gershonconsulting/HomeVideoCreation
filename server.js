@@ -743,6 +743,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   //     narrative + musical sync. Requires LRCLIB synced lyrics.
   //  2. BEAT anchored — photos change on detected beats. Requires aubio.
   //  3. EVEN — fallback when neither is available.
+  console.log('[photo] buildVideoArtifacts: photos=' + photoPaths.length + ', syncedLyricsRaw=' + (syncedLyricsRaw ? syncedLyricsRaw.length + ' chars' : 'MISSING'));
   emit && emit({ phase: 'beat', status: 'analyzing' });
 
   let transitionTimes = null;
@@ -782,6 +783,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
       while (transitionTimes.length < N) transitionTimes.push(audioDuration);
       transitionTimes.push(audioDuration);
       mode = `lyric-anchored (${L} lines, ${(N/L).toFixed(1)} photos/line avg)`;
+      console.log('[photo] mode=lyric  L=' + L + '  N=' + N);
       emit && emit({ phase: 'beat', status: 'detected', bpm: null, beats: L, mode: 'lyric' });
     }
   }
@@ -799,6 +801,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
       }
       transitionTimes.push(audioDuration);
       mode = `beat-synced (${bpm} BPM, ${beats.length} beats)`;
+      console.log('[photo] mode=beat   BPM=' + bpm + '  beats=' + beats.length + '  N=' + photoPaths.length);
       emit && emit({ phase: 'beat', status: 'detected', bpm, beats: beats.length, mode: 'beat' });
     }
   }
@@ -810,6 +813,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     for (let i = 0; i < photoPaths.length; i++) transitionTimes.push(i * perPhotoSec);
     transitionTimes.push(audioDuration);
     mode = 'even';
+    console.log('[photo] mode=even   (no lyrics, no beats)');
     emit && emit({ phase: 'beat', status: 'fallback' });
   }
 
@@ -1036,17 +1040,17 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     );
 
     const stat = await fs.stat(outputPath);
-    // Stream the MP4 inline as base64 so the browser receives it within the
-    // same active HTTP response. Free-tier hosts (Render) wipe ephemeral disks
-    // after idle, so we can't rely on a follow-up GET /api/file/:jobId.
-    const mp4Buf = await fs.readFile(outputPath);
+    // The frontend will auto-fetch /api/file/:jobId immediately on receipt of
+    // this event, while the container is guaranteed still alive (we haven't
+    // returned yet). That avoids both the 30-60s stall of streaming a 20MB
+    // base64 string AND the Render-disk-wipe race that originally motivated
+    // the base64 approach.
     emit({
       phase: 'complete',
       jobId,
       downloadUrl: `/api/file/${jobId}`,
       sizeBytes: stat.size,
       sizeMB: +(stat.size / (1024 * 1024)).toFixed(1),
-      mp4Base64: mp4Buf.toString('base64'),
     });
     res.end();
   } catch (err) {

@@ -651,16 +651,19 @@ function fmtTime(s) {
 }
 
 async function startRender() {
-  // Ask for desktop notification permission (best-effort, requires user gesture)
   if ('Notification' in window && Notification.permission === 'default') {
     try { Notification.requestPermission(); } catch {}
   }
-  // Warn if Analyze is still mid-flight — without it, lyric anchors aren't sent
-  // to the renderer and the photos fall back to beat or even spacing.
+  // If Analyze is still mid-flight, wait for it. Without it the lyric anchors
+  // never reach the renderer and photos fall back to beat or even spacing.
   if (analyzeBtn.disabled && analyzeBtn.textContent.includes('Analyzing')) {
-    if (!confirm('Analyze is still running — proceed without the lyric anchors? (Photos will fall back to beat/even spacing.)')) {
-      return;
+    goBtn.textContent = 'Waiting for Analyze…';
+    goBtn.disabled = true;
+    while (analyzeBtn.disabled && analyzeBtn.textContent.includes('Analyzing')) {
+      await new Promise((r) => setTimeout(r, 200));
     }
+    goBtn.textContent = 'Render film →';
+    goBtn.disabled = false;
   }
   reset();
   goBtn.disabled = true;
@@ -785,7 +788,7 @@ function handleEvent(e) {
       break;
 
     case 'complete': {
-      // Notify user — they may have switched tabs during the slow free-tier render
+      // Notify user — they may have switched tabs during the slow render
       try {
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification('Souvenir film ready', {
@@ -795,11 +798,10 @@ function handleEvent(e) {
           });
         }
       } catch {}
-      // Tab title flash so even without notifications the user sees something
+      // Tab title flash
       const origTitle = '__souvenir_orig_title__' in window ? window.__souvenir_orig_title__ : document.title;
       window.__souvenir_orig_title__ = origTitle;
       document.title = '✓ Film ready! ← Souvenir';
-      // Restore original title once user comes back to the tab
       const restore = () => {
         document.title = origTitle;
         window.removeEventListener('focus', restore);
@@ -809,24 +811,15 @@ function handleEvent(e) {
       window.addEventListener('focus', restore);
       document.addEventListener('visibilitychange', restoreOnVisible);
 
-      // The MP4 is delivered inline as base64 to survive Render free-tier
-      // disk eviction. Decode it here, turn into a Blob, point the link at
-      // a blob:// URL, and auto-trigger the download immediately.
-      let blobUrl = e.downloadUrl; // server-disk fallback
-      if (e.mp4Base64) {
-        const bin = atob(e.mp4Base64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const blob = new Blob([bytes], { type: 'video/mp4' });
-        blobUrl = URL.createObjectURL(blob);
-      }
+      // Auto-trigger the download IMMEDIATELY. The file is still on disk
+      // because the server's response only just ended — the container hasn't
+      // had time to spin down. /api/file/:jobId streams the MP4 as binary,
+      // way faster than the 20MB-base64-in-JSON approach we tried before.
       const a = $('downloadLink');
-      a.href = blobUrl;
+      a.href = e.downloadUrl;
       a.download = `souvenir-${e.jobId}.mp4`;
       $('resultMeta').textContent = `${e.sizeMB} MB · job ${e.jobId}`;
       resultEl.classList.add('show');
-      // Auto-trigger so the user doesn't have to click while the disk still has the file
-      // (the blob is in-memory now, so this is just convenience)
       try { a.click(); } catch {}
       break;
     }
