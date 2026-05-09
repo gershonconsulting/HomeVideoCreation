@@ -441,6 +441,20 @@
 .upload-divider { text-align:center; color:#999; font-size:13px; margin: 8px 0; letter-spacing: 2px; }
 .upload-label { display:block; padding:10px 14px; border:1px dashed #c8c8c8; border-radius:8px; cursor:pointer; font-size:14px; background:#fafafa; }
 .upload-label input[type=file] { margin-left:10px; font-size:13px; }
+
+.version-chip {
+  display:inline-block;
+  margin-top:6px;
+  padding:3px 10px;
+  background:#1a1a1a;
+  color:#ccc;
+  border-radius:99px;
+  font-size:11px;
+  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  letter-spacing:0.3px;
+}
+.version-chip a { color:inherit; text-decoration:underline; }
+.version-chip .deploy-time { opacity:0.6; margin-left:6px; }
 </style>
 </head>
 <body>
@@ -450,6 +464,7 @@
   <header>
     <h1 class="brand">Souvenir<em>.</em></h1>
     <div class="tagline">Personal Memory Films</div>
+    <div class="version-chip" id="version-chip">v…</div>
   </header>
 
   <!-- 1. Photos -->
@@ -833,14 +848,39 @@ analyzeBtn.addEventListener('click', async () => {
     fd.append('audioFile', audioFile);
     fd.append('photosUrl', photosUrl);
     const r = await fetch('/api/analyze', { method: 'POST', body: fd });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP ${r.status}`);
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+
+    // Stream JSONL events. Each event is either a progress update or the
+    // final {phase:'complete', result:{...}} / {phase:'error', message}.
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let data = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const evt = JSON.parse(line);
+        if (evt.phase === 'analyze') {
+          // Update button text + hint with the current percent
+          analyzeBtn.textContent = `Analyzing… ${evt.percent}%`;
+          analyzeHint.textContent = evt.label || '';
+        } else if (evt.phase === 'error') {
+          throw new Error(evt.message || 'Analyze failed');
+        } else if (evt.phase === 'complete') {
+          data = evt.result;
+        }
+      }
     }
-    const data = await r.json();
+    if (!data) throw new Error('No result returned');
+
     lastAnalysis = data;
     renderSongCard(data);
-    analyzeHint.textContent = '';
 
     // Auto-fill the story textarea with the synced lyrics IF it's empty.
     // User can edit any line afterwards; the [mm:ss] anchors keep them
@@ -1011,11 +1051,15 @@ document.getElementById('photosUrl').addEventListener('change', function(){
       const pad = n => String(n).padStart(2, '0');
       const human = `${booted.getUTCFullYear()}-${pad(booted.getUTCMonth()+1)}-${pad(booted.getUTCDate())} ${pad(booted.getUTCHours())}:${pad(booted.getUTCMinutes())} UTC`;
       const link = v.commit !== 'dev'
-        ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:underline">${v.shortCommit}</a>`
+        ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer">${v.shortCommit}</a>`
         : v.shortCommit;
+      // Footer (full info) + Header chip (compact)
       document.getElementById('version-text').innerHTML = `<b>Souvenir v${v.app}</b> &middot; build ${link} &middot; deployed ${human}`;
+      const chip = document.getElementById('version-chip');
+      if (chip) chip.innerHTML = `v${v.app} &middot; ${link}<span class="deploy-time"> &middot; ${human}</span>`;
     } catch (e) {
       document.getElementById('version-text').textContent = 'version unknown';
+      const chip = document.getElementById('version-chip'); if (chip) chip.textContent = '?';
     }
   })();
 </script>

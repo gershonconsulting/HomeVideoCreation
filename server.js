@@ -343,16 +343,16 @@ function confidenceFor(match, targetDuration) {
 // MP3-based analyzer: probe duration via ffprobe, count photos at the
 // Google Photos URL, suggest target photo counts, optionally try LRCLIB
 // from filename ("Artist - Title.mp3").
-async function analyzeFromFile(audioFilePath, photosUrl, originalFilename) {
-  const noop = () => {};
+async function analyzeFromFile(audioFilePath, photosUrl, originalFilename, emit) {
+  const E = emit || (() => {});
+  E({ phase: 'analyze', percent: 5, label: 'Reading audio duration' });
 
-  // Run duration probe and album scrape in parallel
-  const [duration, photoUrls] = await Promise.all([
-    probeDuration(audioFilePath).catch(() => 0),
-    scrapeGooglePhotos(photosUrl, noop).catch(() => []),
-  ]);
+  const duration = await probeDuration(audioFilePath).catch(() => 0);
+  E({ phase: 'analyze', percent: 30, label: 'Counting photos in album' });
 
+  const photoUrls = await scrapeGooglePhotos(photosUrl, () => {}).catch(() => []);
   const photosFound = photoUrls.length;
+  E({ phase: 'analyze', percent: 60, label: `${photosFound} photos found` });
 
   // Try to extract Artist - Title from filename for bonus LRCLIB sync
   let parsedArtist = '', parsedTitle = '';
@@ -366,6 +366,10 @@ async function analyzeFromFile(audioFilePath, photosUrl, originalFilename) {
     const m = stripped.match(/^(.+?)\s*[-–—]\s*(.+)$/);
     if (m) { parsedArtist = m[1].trim(); parsedTitle = m[2].trim(); }
   }
+
+  E({ phase: 'analyze', percent: 70, label: parsedArtist && parsedTitle
+      ? `Looking up synced lyrics`
+      : 'Skipping lyrics (filename did not parse as Artist - Title)' });
 
   // Optional lyrics lookup — non-fatal
   let lyrics = null, lyricLines = [];
@@ -405,6 +409,7 @@ async function analyzeFromFile(audioFilePath, photosUrl, originalFilename) {
   const trim = photosFound > recommended ? photosFound - recommended : 0;
   const add  = photosFound > 0 && photosFound < Math.max(1, Math.round(dur / 12)) ? Math.round(dur / 6) - photosFound : 0;
 
+  E({ phase: 'analyze', percent: 100, label: lyrics ? `${lyricLines.length} synced lines matched` : 'Analysis complete' });
   return {
     audio: {
       filename: originalFilename || '',
@@ -1013,27 +1018,32 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 // Song analysis endpoint — fast (no audio download)
 // ───────────────────────────────────────────────────────────────
 app.post('/api/analyze', upload.single('audioFile'), async (req, res) => {
+  // Streaming JSONL: progress events + a final {phase:'complete', result:...}.
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  const emit = (e) => res.write(JSON.stringify(e) + '\n');
   try {
     const { audioUrl, photosUrl } = req.body || {};
-
-    // Path A: file uploaded — primary mode now (Render can't reach YouTube)
     if (req.file) {
       if (!photosUrl) {
-        return res.status(400).json({ error: 'Provide a Google Photos shared URL alongside the audio file.' });
+        emit({ phase: 'error', message: 'Provide a Google Photos shared URL alongside the audio file.' });
+        return res.end();
       }
-      const result = await analyzeFromFile(req.file.path, photosUrl, req.file.originalname);
-      // tidy up the temp file (analyze doesn't need to keep it)
+      const result = await analyzeFromFile(req.file.path, photosUrl, req.file.originalname, emit);
       try { await fs.unlink(req.file.path); } catch {}
-      return res.json(result);
+      emit({ phase: 'complete', result });
+      return res.end();
     }
-
-    // Path B: legacy URL-only (Codespaces / local where yt-dlp works)
-    if (!audioUrl) return res.status(400).json({ error: 'Provide an audio file (and photos URL) — or a YouTube URL for local use.' });
+    if (!audioUrl) {
+      emit({ phase: 'error', message: 'Provide an audio file (and photos URL).' });
+      return res.end();
+    }
     const result = await analyzeSong(audioUrl);
-    res.json(result);
+    emit({ phase: 'complete', result });
+    res.end();
   } catch (err) {
     console.error('Analyze error:', err);
-    res.status(500).json({ error: err.message || String(err) });
+    emit({ phase: 'error', message: err.message || String(err) });
+    res.end();
   }
 });
 
