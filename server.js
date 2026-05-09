@@ -738,31 +738,73 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   const srtPath = path.join(jobDir, 'captions.srt');
   await fs.writeFile(srtPath, srt);
 
-  // Try to beat-sync the photo transitions. Fall back to even spacing if aubio
-  // can't analyze the audio (rare formats, very short clips, etc).
+  // Photo transition strategy (in order of preference):
+  //  1. LYRIC-LINE anchored — photos change when a new line is sung. Best
+  //     narrative + musical sync. Requires LRCLIB synced lyrics.
+  //  2. BEAT anchored — photos change on detected beats. Requires aubio.
+  //  3. EVEN — fallback when neither is available.
   emit && emit({ phase: 'beat', status: 'analyzing' });
-  const beatResult = audioPath ? await detectBeats(audioPath) : null;
 
-  // Compute per-photo transition timestamps. transitionTimes[i] = when photo i
-  // STARTS being shown. Last entry is audioDuration (= when last photo ends).
-  let transitionTimes;
-  let mode;
+  let transitionTimes = null;
+  let mode = 'even';
   let bpm = null;
-  if (beatResult && beatResult.beats.length >= photoPaths.length) {
-    bpm = beatResult.bpm;
-    const beats = beatResult.beats;
-    // Spread photoPaths.length transitions evenly across the beat timeline,
-    // snapping each to the nearest actual beat. The first photo starts at 0
-    // (or beats[0] if you want the very first beat to land too); we use 0.
-    transitionTimes = [0];
-    for (let i = 1; i < photoPaths.length; i++) {
-      const beatIdx = Math.round((i / photoPaths.length) * beats.length);
-      transitionTimes.push(beats[Math.min(beatIdx, beats.length - 1)]);
+
+  // 1. Try lyric-line anchoring
+  if (syncedLyricsRaw) {
+    const lines = parseLrcLines(syncedLyricsRaw).filter(l => l.text.length > 0);
+    if (lines.length >= 4) {
+      // Each photo claims a slice of the song. Distribute photos evenly across
+      // lyric lines; lines with longer durations get more photos. Photos change
+      // AT the start of each lyric line + at sub-line intervals when a line
+      // gets >1 photo.
+      const N = photoPaths.length;
+      const L = lines.length;
+      transitionTimes = [0];
+      let photoIdx = 1; // photo 0 starts at 0
+      for (let lineIdx = 0; lineIdx < L; lineIdx++) {
+        const lineStart = lines[lineIdx].time;
+        const lineEnd = (lineIdx + 1 < L) ? lines[lineIdx + 1].time : audioDuration;
+        // How many of the N photos should have transitioned by the END of this line?
+        // floor() avoids the 0.5-rounds-up bug (which made photo 0 short and the
+        // last photo bloated). Force the last line to bring us up to N.
+        const targetByEnd = (lineIdx === L - 1) ? N : Math.floor(((lineIdx + 1) / L) * N);
+        const photosThisLine = targetByEnd - (photoIdx - 1);
+        if (photosThisLine <= 0) continue;
+        // Photo at position photoIdx - 1 was already transitioned at start of THIS line.
+        // We need photosThisLine more transitions distributed up to lineEnd.
+        const subDur = (lineEnd - lineStart) / photosThisLine;
+        for (let j = 0; j < photosThisLine && photoIdx < N; j++) {
+          transitionTimes.push(lineStart + (j + 1) * subDur);
+          photoIdx++;
+        }
+      }
+      // Pad if rounding left us short
+      while (transitionTimes.length < N) transitionTimes.push(audioDuration);
+      transitionTimes.push(audioDuration);
+      mode = `lyric-anchored (${L} lines, ${(N/L).toFixed(1)} photos/line avg)`;
+      emit && emit({ phase: 'beat', status: 'detected', bpm: null, beats: L, mode: 'lyric' });
     }
-    transitionTimes.push(audioDuration);
-    mode = `beat-synced (${bpm} BPM, ${beats.length} beats)`;
-    emit && emit({ phase: 'beat', status: 'detected', bpm, beats: beats.length });
-  } else {
+  }
+
+  // 2. Fall back to beat anchoring
+  if (!transitionTimes) {
+    const beatResult = audioPath ? await detectBeats(audioPath) : null;
+    if (beatResult && beatResult.beats.length >= photoPaths.length) {
+      bpm = beatResult.bpm;
+      const beats = beatResult.beats;
+      transitionTimes = [0];
+      for (let i = 1; i < photoPaths.length; i++) {
+        const beatIdx = Math.round((i / photoPaths.length) * beats.length);
+        transitionTimes.push(beats[Math.min(beatIdx, beats.length - 1)]);
+      }
+      transitionTimes.push(audioDuration);
+      mode = `beat-synced (${bpm} BPM, ${beats.length} beats)`;
+      emit && emit({ phase: 'beat', status: 'detected', bpm, beats: beats.length, mode: 'beat' });
+    }
+  }
+
+  // 3. Even spacing fallback
+  if (!transitionTimes) {
     const perPhotoSec = audioDuration / photoPaths.length;
     transitionTimes = [];
     for (let i = 0; i < photoPaths.length; i++) transitionTimes.push(i * perPhotoSec);
@@ -1082,6 +1124,31 @@ app.get('/api/jobs', async (req, res) => {
 
 // ───────────────────────────────────────────────────────────────
 app.get('/api/version', (_req, res) => res.json(VERSION));
+
+// Health-check: returns whether each runtime tool is actually present on the
+// host. Useful for verifying aubio / ffmpeg / yt-dlp install on a fresh deploy.
+app.get('/api/healthz', async (_req, res) => {
+  async function probe(cmd, arg) {
+    return new Promise((resolve) => {
+      const p = spawn(cmd, [arg]);
+      let out = '';
+      p.stdout.on('data', (c) => (out += c.toString()));
+      p.stderr.on('data', (c) => (out += c.toString()));
+      p.on('error', () => resolve({ ok: false, error: 'not found' }));
+      p.on('close', (code) => resolve({
+        ok: code === 0,
+        version: (out.split(/\r?\n/)[0] || '').slice(0, 100),
+      }));
+    });
+  }
+  const tools = {
+    ffmpeg:  await probe('ffmpeg',  '-version'),
+    ffprobe: await probe('ffprobe', '-version'),
+    aubio:   await probe('aubio',   '--version'),
+    'yt-dlp': await probe('yt-dlp', '--version'),
+  };
+  res.json({ version: VERSION, tools });
+});
 
 app.listen(PORT, () => {
   console.log('');
