@@ -42,6 +42,16 @@ await fs.mkdir(JOBS_DIR, { recursive: true });
 // (we'll create a tmp dir up-front, the render handler moves files into the job dir)
 const UPLOAD_TMP = path.join(JOBS_DIR, '_uploads_tmp');
 await fs.mkdir(UPLOAD_TMP, { recursive: true });
+
+// Build/deploy fingerprint surfaced via /api/version so the user can confirm
+// which commit is actually running on Render. RENDER_GIT_COMMIT is set by
+// Render at deploy time; locally it falls back to "dev".
+const VERSION = {
+  commit: process.env.RENDER_GIT_COMMIT || 'dev',
+  shortCommit: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7),
+  branch: process.env.RENDER_GIT_BRANCH || 'main',
+  bootedAt: new Date().toISOString(),
+};
 const upload = multer({
   dest: UPLOAD_TMP,
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
@@ -930,9 +940,12 @@ app.get('/api/jobs', async (req, res) => {
 });
 
 // ───────────────────────────────────────────────────────────────
+app.get('/api/version', (_req, res) => res.json(VERSION));
+
 app.listen(PORT, () => {
   console.log('');
   console.log('  Souvenir running at http://localhost:' + PORT);
+  console.log('  Version: ' + VERSION.shortCommit + ' (booted ' + VERSION.bootedAt + ')');
   console.log('  Jobs stored in: ' + JOBS_DIR);
   console.log('');
 });

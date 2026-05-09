@@ -974,5 +974,26 @@ document.getElementById('audioFile').addEventListener('change', function(){
   }
 });
 </script>
+<footer id="version-footer" style="text-align:center; padding:24px 0 16px; color:#999; font-size:11px; font-family:-apple-system,BlinkMacSystemFont,sans-serif;">
+  <span id="version-text">Loading version…</span>
+</footer>
+<script>
+  (async () => {
+    try {
+      const r = await fetch('/api/version');
+      const v = await r.json();
+      const booted = new Date(v.bootedAt);
+      // e.g. "v db818f0 · deployed 2026-05-07 16:42 UTC"
+      const pad = n => String(n).padStart(2, '0');
+      const human = `${booted.getUTCFullYear()}-${pad(booted.getUTCMonth()+1)}-${pad(booted.getUTCDate())} ${pad(booted.getUTCHours())}:${pad(booted.getUTCMinutes())} UTC`;
+      const link = v.commit !== 'dev'
+        ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer">${v.shortCommit}</a>`
+        : v.shortCommit;
+      document.getElementById('version-text').innerHTML = `v ${link} · deployed ${human}`;
+    } catch (e) {
+      document.getElementById('version-text').textContent = 'version unknown';
+    }
+  })();
+</script>
 </body>
 </html>
