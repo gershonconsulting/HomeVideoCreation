@@ -671,6 +671,11 @@ async function startRender() {
     fd.append('text', text);
     fd.append('options', JSON.stringify(options));
     fd.append('audioFile', audioFile);
+    // Pass synced lyrics from the last Analyze run so the renderer can
+    // anchor [Refrain] blocks to the actual chorus times in the audio.
+    if (lastAnalysis && lastAnalysis.lyrics && lastAnalysis.lyrics.syncedLyricsRaw) {
+      fd.append('syncedLyrics', lastAnalysis.lyrics.syncedLyricsRaw);
+    }
     res = await fetch('/api/render', { method: 'POST', body: fd });
     if (!res.ok || !res.body) throw new Error('Server error: ' + res.status);
 

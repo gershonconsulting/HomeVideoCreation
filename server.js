@@ -533,13 +533,142 @@ function escapeSubtitlesPath(p) {
     .replace(/'/g, "\\'");    // Escape single quotes inside the quoted path
 }
 
+// Snap user-written text to the actual song structure when LRCLIB synced
+// lyrics are available. This handles cases where the user wrote their own
+// commentary in verse/chorus blocks but didn't add [mm:ss] timestamps —
+// without this, line N just shows up at duration*N/total which has no
+// relation to where the chorus actually plays in the audio.
+//
+// Strategy:
+//  1. Detect chorus instances in the synced lyrics by line repetition.
+//  2. Parse user text into "sections" split on [Refrain]/[Chorus]/[Verse]/etc.
+//  3. Map user's chorus sections to the song's chorus instance times in
+//     order; verse sections fill the gaps between (or before/after).
+//  4. Within each section, distribute lines evenly across that time range.
+function alignTextToSongStructure(userText, syncedLyricsRaw, audioDuration) {
+  if (!syncedLyricsRaw) return null;
+  const lyricLines = parseLrcLines(syncedLyricsRaw).filter(l => l.text.length > 0);
+  if (lyricLines.length < 8) return null;
+
+  // Find chorus lines: keys (first 30 chars, lowercased) that repeat ≥ 2x
+  const counts = {};
+  lyricLines.forEach(l => {
+    const k = l.text.toLowerCase().trim().slice(0, 30);
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  const chorusKeys = new Set(Object.keys(counts).filter(k => counts[k] >= 2));
+  if (chorusKeys.size === 0) return null;
+
+  // Find chorus instances (consecutive runs of chorus-keyed lines)
+  const instances = [];
+  let inChorus = false, chorusStart = null;
+  for (let i = 0; i < lyricLines.length; i++) {
+    const k = lyricLines[i].text.toLowerCase().trim().slice(0, 30);
+    if (chorusKeys.has(k)) {
+      if (!inChorus) { inChorus = true; chorusStart = lyricLines[i].time; }
+    } else {
+      if (inChorus) {
+        instances.push({ start: chorusStart, end: lyricLines[i].time });
+        inChorus = false;
+      }
+    }
+  }
+  if (inChorus) {
+    // Last chorus extends to song end
+    instances.push({ start: chorusStart, end: audioDuration });
+  }
+  if (instances.length === 0) return null;
+
+  // Parse user text into sections separated by markers like [Refrain], [Chorus], [Verse 2], (Parlé...)
+  const sections = [];
+  let curLines = [];
+  let curMarker = null; // null = pre-marker (intro/verse 1)
+  for (const raw of userText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const hdrSquare = line.match(/^\[(.+?)\]\s*$/);
+    const hdrParen  = line.match(/^\(([^)]+)\)\s*$/);
+    if (hdrSquare || hdrParen) {
+      if (curLines.length > 0) sections.push({ marker: curMarker, lines: curLines });
+      curLines = [];
+      curMarker = (hdrSquare ? hdrSquare[1] : hdrParen[1]).toLowerCase();
+      continue;
+    }
+    curLines.push(line);
+  }
+  if (curLines.length > 0) sections.push({ marker: curMarker, lines: curLines });
+  if (sections.length === 0) return null;
+
+  // Categorize each section as chorus or verse
+  const isChorusMarker = m => m && /refrain|chorus/.test(m);
+
+  // Walk through sections in order, assigning time ranges
+  const captions = [];
+  let nextChorusIdx = 0;
+  let cursor = 0; // time we've used up to
+
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const isChorus = isChorusMarker(sec.marker);
+    let start, end;
+    if (isChorus) {
+      // Snap to next available chorus instance
+      const c = instances[nextChorusIdx];
+      if (c) {
+        start = c.start;
+        end = c.end;
+        nextChorusIdx++;
+      } else {
+        // More chorus blocks than the song has — distribute remaining time
+        start = cursor;
+        end = audioDuration;
+      }
+    } else {
+      // Verse: from cursor to next chorus start (or song end)
+      const next = instances[nextChorusIdx];
+      start = cursor;
+      end = next ? next.start : audioDuration;
+    }
+    if (end <= start) end = Math.min(audioDuration, start + 5);
+    cursor = end;
+
+    const n = sec.lines.length;
+    if (n > 0) {
+      const per = (end - start) / n;
+      for (let j = 0; j < n; j++) {
+        captions.push({
+          start: start + j * per,
+          end: start + (j + 1) * per,
+          text: sec.lines[j],
+        });
+      }
+    }
+  }
+
+  if (captions.length === 0) return null;
+  return captions;
+}
+
 // Parse the user's text input into timed caption blocks.
 // A line starting with [mm:ss] or [mm:ss.xx] starts a new caption at that time;
 // continuation lines (no leading [) get appended to the previous caption.
 // If NO timestamps are present anywhere, fall back to even-distribution by
 // blank-line-separated paragraphs.
-function parseTextToCaptions(text, audioDuration) {
+function parseTextToCaptions(text, audioDuration, syncedLyricsRaw) {
   const lines = text.split(/\r?\n/);
+
+  // First try song-structure alignment if the user has section markers AND
+  // we have synced lyrics. This wins over even-distribution because it
+  // anchors [Refrain] blocks to the actual chorus times in the audio.
+  const hasSectionMarker = lines.some(l => /^\s*[\[\(]\s*(refrain|chorus|verse|couplet|parl)/i.test(l));
+  if (hasSectionMarker && syncedLyricsRaw) {
+    const aligned = alignTextToSongStructure(text, syncedLyricsRaw, audioDuration);
+    if (aligned && aligned.length > 0) {
+      console.log('[caption] aligned ' + aligned.length + ' lines to song structure');
+      return aligned;
+    }
+  }
+
   const timedRe = /^\s*\[(\d+):(\d+)(?:\.(\d+))?\]\s*(.*)$/;
 
   // Detect: are there ANY timestamped lines?
@@ -593,9 +722,9 @@ function parseTextToCaptions(text, audioDuration) {
   }));
 }
 
-async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audioPath, emit) {
+async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audioPath, syncedLyricsRaw, emit) {
   // captions.srt — built from parsed captions (timed or evenly distributed)
-  const captions = parseTextToCaptions(text, audioDuration);
+  const captions = parseTextToCaptions(text, audioDuration, syncedLyricsRaw);
   let srt = '';
   for (let i = 0; i < captions.length; i++) {
     const c = captions[i];
@@ -799,7 +928,7 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
 app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   const emit = makeEmitter(res);
 
-  const { photosUrl, audioUrl, text } = req.body || {};
+  const { photosUrl, audioUrl, text, syncedLyrics } = req.body || {};
   let options = req.body?.options || {};
   if (typeof options === 'string') {
     try { options = JSON.parse(options); } catch { options = {}; }
@@ -843,7 +972,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
     const { concatPath, srtPath, captionCount, mode, bpm } = await buildVideoArtifacts(
-      jobDir, photoPaths, text, audioDuration, audioPath, emit
+      jobDir, photoPaths, text, audioDuration, audioPath, syncedLyrics, emit
     );
     emit({
       phase: 'plan',
