@@ -986,9 +986,9 @@ document.getElementById('audioFile').addEventListener('change', function(){
       const pad = n => String(n).padStart(2, '0');
       const human = `${booted.getUTCFullYear()}-${pad(booted.getUTCMonth()+1)}-${pad(booted.getUTCDate())} ${pad(booted.getUTCHours())}:${pad(booted.getUTCMinutes())} UTC`;
       const link = v.commit !== 'dev'
-        ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer">${v.shortCommit}</a>`
+        ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:underline">${v.shortCommit}</a>`
         : v.shortCommit;
-      document.getElementById('version-text').innerHTML = `v ${link} · deployed ${human}`;
+      document.getElementById('version-text').innerHTML = `<b>Souvenir v${v.app}</b> &middot; build ${link} &middot; deployed ${human}`;
     } catch (e) {
       document.getElementById('version-text').textContent = 'version unknown';
     }
