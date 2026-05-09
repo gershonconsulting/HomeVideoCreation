@@ -499,24 +499,17 @@
     </div>
   </div>
 
-  <!-- 3. Text -->
+  <!-- 3. Story -->
   <div class="field">
     <div class="field-head">
       <div class="field-num">iii.</div>
-      <div class="field-title">Text on the pictures</div>
+      <div class="field-title">Tell the story</div>
     </div>
     <p class="field-help">
-      Optional <code>[mm:ss]</code> at the start of a line pins it to that second.
-      Lines without timestamps split evenly. Mix freely — replace lyric lines with your own commentary at the same time codes.
+      Once you click <b>Analyze</b> above, the original synced lyrics auto-fill below — each line tagged with its
+      <code>[mm:ss]</code> timestamp. Edit any line you want to make personal. Keep the timestamps so each line still lands at the exact moment that part of the song plays.
     </p>
-    <textarea id="text" placeholder="[00:08] Tu sais, je n'ai jamais été aussi heureux que ce matin-là
-[00:13] Nous marchions sur une plage un peu comme celle-ci
-
-— or, no timestamps and they spread evenly: —
-
-Tu sais, cela fait 13 ans maintenant que je suis ton plus grand fan.
-
-On a partagé des dizaines de milliers de photos comme celle-ci, de nous deux."></textarea>
+    <textarea id="text" placeholder="(Click Analyze to load the original lyrics here, then edit the lines you want to personalize.)"></textarea>
   </div>
 
   <!-- Settings -->
@@ -848,6 +841,20 @@ analyzeBtn.addEventListener('click', async () => {
     lastAnalysis = data;
     renderSongCard(data);
     analyzeHint.textContent = '';
+
+    // Auto-fill the story textarea with the synced lyrics IF it's empty.
+    // User can edit any line afterwards; the [mm:ss] anchors keep them
+    // landing at the right moment.
+    const ta = document.getElementById('text');
+    const hasSynced = data && data.lyrics && data.lyrics.synced && data.lyrics.lines && data.lyrics.lines.length > 0;
+    if (hasSynced && !ta.value.trim()) {
+      ta.value = data.lyrics.lines
+        .map(l => `[${fmtMmSs(l.time)}] ${l.text}`)
+        .join('\n');
+      analyzeHint.textContent = `Loaded ${data.lyrics.lines.length} lines below — edit the ones you want to personalize.`;
+    } else if (hasSynced && ta.value.trim()) {
+      analyzeHint.textContent = `${data.lyrics.lines.length} synced lines available. (Story field already has content; click "Reset to original lyrics" to replace.)`;
+    }
   } catch (err) {
     analyzeHint.textContent = 'Couldn\'t analyze: ' + (err.message || err);
   } finally {
@@ -925,7 +932,7 @@ function renderSongCard(data) {
   // Buttons
   useLyricsBtn.disabled = !(lyrics.found && lyrics.synced);
   useLyricsBtn.textContent = lyrics.found && lyrics.synced
-    ? 'Use synced lyrics as captions ↓'
+    ? 'Reset story to original lyrics ↓'
     : 'No synced lyrics found for this file';
   showLyricsBtn.style.display = (lyrics.found && lyrics.lines && lyrics.lines.length) ? '' : 'none';
   lyricsPreview.classList.remove('show');
@@ -940,7 +947,7 @@ useLyricsBtn.addEventListener('click', () => {
     .map((l) => `[${fmtMmSs(l.time)}] ${l.text}`)
     .join('\n');
   const ta = $('text');
-  if (ta.value.trim() && !confirm('Replace existing text with synced lyrics?')) return;
+  if (ta.value.trim() && !confirm('Replace your edits with the original lyrics?')) return;
   ta.value = formatted;
   ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
@@ -966,15 +973,28 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Show the chosen audio filename
+// Show the chosen audio filename. If photos URL is already set, kick off
+// Analyze automatically so the story textarea is ready for editing in step 3.
 document.getElementById('audioFile').addEventListener('change', function(){
   const f = this.files[0];
   const note = document.getElementById('audioFileChosen');
   if (f) {
     note.textContent = 'Selected: ' + f.name + ' (' + (f.size/1024/1024).toFixed(1) + ' MB)';
     note.style.display = 'block';
+    if (document.getElementById('photosUrl').value.trim()) {
+      // Auto-trigger Analyze a tick later so the UI updates first
+      setTimeout(() => analyzeBtn.click(), 50);
+    }
   } else {
     note.style.display = 'none';
+  }
+});
+
+// Auto-trigger Analyze when photos URL is filled in AFTER audio is picked
+document.getElementById('photosUrl').addEventListener('change', function(){
+  const audio = document.getElementById('audioFile').files[0];
+  if (audio && this.value.trim() && !lastAnalysis) {
+    setTimeout(() => analyzeBtn.click(), 50);
   }
 });
 </script>
