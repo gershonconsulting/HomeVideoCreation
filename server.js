@@ -49,6 +49,7 @@ await fs.mkdir(UPLOAD_TMP, { recursive: true });
 const PKG = JSON.parse(await fs.readFile(new URL('./package.json', import.meta.url), 'utf8'));
 const VERSION = {
   app: PKG.version,
+  build: PKG.build || 0,
   commit: process.env.RENDER_GIT_COMMIT || 'dev',
   shortCommit: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7),
   branch: process.env.RENDER_GIT_BRANCH || 'main',
@@ -519,6 +520,20 @@ async function analyzeSong(youtubeUrl) {
 // ───────────────────────────────────────────────────────────────
 // Step 4: Build concat playlist + SRT, then run ffmpeg
 // ───────────────────────────────────────────────────────────────
+function buildFilename(rawTitle, when) {
+  // Sanitize title for filesystem use, append ISO-ish date stamp
+  const safe = (rawTitle || 'souvenir')
+    .replace(/[^A-Za-z0-9_\-\s]+/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'souvenir';
+  const d = when || new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
+  return `${safe}_${stamp}.mp4`;
+}
+
 function srtTime(seconds) {
   const t = Math.max(0, seconds);
   const h = Math.floor(t / 3600);
@@ -814,27 +829,33 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
 
   console.log('[photo] mode=' + mode + '  N=' + photoPaths.length + '  anchors=' + anchors.length);
 
-  // Distribute photos across the merged anchor list
-  let transitionTimes;
-  if (anchors.length >= 2) {
-    const N = photoPaths.length;
-    const A = anchors.length;
-    transitionTimes = [];
-    for (let i = 0; i <= N; i++) {
-      const exact = (i / N) * (A - 1);
-      const idx = Math.floor(exact);
-      const frac = exact - idx;
-      const a0 = anchors[Math.min(idx, A - 1)];
-      const a1 = anchors[Math.min(idx + 1, A - 1)];
-      transitionTimes.push(a0 + frac * (a1 - a0));
+  // Walk forward through the song, picking a transition every ~TARGET_PER
+  // seconds, snapping to the nearest anchor in [MIN_PER, MAX_PER]. If no
+  // anchor falls in that window, force a synthetic transition at MAX_PER so
+  // photos NEVER stay on screen longer than 3s.
+  // Photos LOOP — if we need more slots than photos, cycle back through.
+  const TARGET_PER = 2.0;
+  const MIN_PER    = 1.4;
+  const MAX_PER    = 3.0;
+  let transitionTimes = [0];
+  while (transitionTimes[transitionTimes.length - 1] < audioDuration - 0.3) {
+    const last = transitionTimes[transitionTimes.length - 1];
+    const ideal = last + TARGET_PER;
+    const winLo = last + MIN_PER;
+    const winHi = last + MAX_PER;
+    // Anchors in window
+    const inWin = anchors.filter(a => a >= winLo && a <= winHi);
+    let next;
+    if (inWin.length > 0) {
+      next = inWin.reduce((b, c) => Math.abs(c - ideal) < Math.abs(b - ideal) ? c : b);
+    } else {
+      next = Math.min(audioDuration, last + MAX_PER);
     }
-    transitionTimes[transitionTimes.length - 1] = audioDuration;
-  } else {
-    const perPhotoSec = audioDuration / photoPaths.length;
-    transitionTimes = [];
-    for (let i = 0; i < photoPaths.length; i++) transitionTimes.push(i * perPhotoSec);
-    transitionTimes.push(audioDuration);
+    transitionTimes.push(next);
   }
+  // Force last transition to audioDuration
+  transitionTimes[transitionTimes.length - 1] = audioDuration;
+  console.log('[photo] transitions=' + (transitionTimes.length - 1) + '  photos=' + photoPaths.length + '  cycle=' + Math.ceil((transitionTimes.length - 1) / photoPaths.length) + 'x');
 
   emit && emit({
     phase: 'beat',
@@ -844,17 +865,21 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     mode: haveUser && haveLrc ? 'union' : (haveLrc ? 'lyric' : (haveBeats ? 'beat' : 'even')),
   });
 
-  // Build ffconcat playlist with explicit per-photo durations.
-  // Last entry needs special handling: the concat demuxer drops the last
-  // file's duration unless we repeat the last file (yes, really).
+  // Build ffconcat playlist. Photos LOOP through the photo list, so we
+  // cycle photoPaths[i % photoPaths.length] for each transition slot.
+  // The concat demuxer drops the last entry's duration unless the last
+  // file is repeated, hence the trailing repeat.
+  const slots = transitionTimes.length - 1;
   const concatLines = ['ffconcat version 1.0'];
-  for (let i = 0; i < photoPaths.length; i++) {
+  let lastFile = '';
+  for (let i = 0; i < slots; i++) {
     const dur = transitionTimes[i + 1] - transitionTimes[i];
-    concatLines.push(`file '${photoPaths[i]}'`);
+    const f = photoPaths[i % photoPaths.length];
+    concatLines.push(`file '${f}'`);
     concatLines.push(`duration ${dur.toFixed(4)}`);
+    lastFile = f;
   }
-  // Repeat the last file so its duration is honored
-  concatLines.push(`file '${photoPaths[photoPaths.length - 1]}'`);
+  concatLines.push(`file '${lastFile}'`);
   const concatPath = path.join(jobDir, 'photos.concat');
   await fs.writeFile(concatPath, concatLines.join('\n'));
 
@@ -1006,7 +1031,7 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
 app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   const emit = makeEmitter(res);
 
-  const { photosUrl, audioUrl, text, syncedLyrics } = req.body || {};
+  const { photosUrl, audioUrl, text, syncedLyrics, title } = req.body || {};
   let options = req.body?.options || {};
   if (typeof options === 'string') {
     try { options = JSON.parse(options); } catch { options = {}; }
@@ -1067,15 +1092,12 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     );
 
     const stat = await fs.stat(outputPath);
-    // The frontend will auto-fetch /api/file/:jobId immediately on receipt of
-    // this event, while the container is guaranteed still alive (we haven't
-    // returned yet). That avoids both the 30-60s stall of streaming a 20MB
-    // base64 string AND the Render-disk-wipe race that originally motivated
-    // the base64 approach.
+    const fileName = buildFilename(title, new Date());
     emit({
       phase: 'complete',
       jobId,
-      downloadUrl: `/api/file/${jobId}`,
+      filename: fileName,
+      downloadUrl: `/api/file/${jobId}?name=${encodeURIComponent(fileName)}`,
       sizeBytes: stat.size,
       sizeMB: +(stat.size / (1024 * 1024)).toFixed(1),
     });
@@ -1129,8 +1151,9 @@ app.get('/api/file/:jobId', async (req, res) => {
   if (!existsSync(file)) {
     return res.status(404).send('Not found');
   }
+  const requested = (req.query.name || `souvenir-${jobId}.mp4`).replace(/[^A-Za-z0-9._-]/g, '_');
   res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Content-Disposition', `attachment; filename="souvenir-${jobId}.mp4"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${requested}"`);
   createReadStream(file).pipe(res);
 });
 
@@ -1184,7 +1207,7 @@ app.get('/api/healthz', async (_req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('  Souvenir running at http://localhost:' + PORT);
-  console.log('  Version: v' + VERSION.app + ' (commit ' + VERSION.shortCommit + ', booted ' + VERSION.bootedAt + ')');
+  console.log('  Build #' + VERSION.build + ' (v' + VERSION.app + ', commit ' + VERSION.shortCommit + ', booted ' + VERSION.bootedAt + ')');
   console.log('  Jobs stored in: ' + JOBS_DIR);
   console.log('');
 });

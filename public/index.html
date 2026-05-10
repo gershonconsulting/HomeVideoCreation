@@ -533,6 +533,10 @@
       <div class="field-num">iv.</div>
       <div class="field-title">Settings</div>
     </div>
+    <div class="setting" style="margin-bottom:12px">
+      <label for="movieTitle" style="display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#666; margin-bottom:4px;">Movie title (saved as filename)</label>
+      <input type="text" id="movieTitle" placeholder="e.g. Christelle 13 ans (auto-derived from audio file if blank)" style="width:100%; padding:8px 12px; font-size:14px; border:1px solid #c8c8c8; border-radius:6px; background:#fff;" />
+    </div>
     <div class="settings">
       <div class="setting">
         <label>Resolution</label>
@@ -695,11 +699,19 @@ async function startRender() {
     fd.append('text', text);
     fd.append('options', JSON.stringify(options));
     fd.append('audioFile', audioFile);
-    // Pass synced lyrics from the last Analyze run so the renderer can
-    // anchor [Refrain] blocks to the actual chorus times in the audio.
     if (lastAnalysis && lastAnalysis.lyrics && lastAnalysis.lyrics.syncedLyricsRaw) {
       fd.append('syncedLyrics', lastAnalysis.lyrics.syncedLyricsRaw);
     }
+    // Movie title: explicit user input wins; otherwise derive from audio
+    // filename (parsed Artist-Title or just the filename minus extension).
+    const titleInput = document.getElementById('movieTitle').value.trim();
+    let derivedTitle = '';
+    if (lastAnalysis && lastAnalysis.audio) {
+      const a = lastAnalysis.audio;
+      if (a.parsedArtist && a.parsedTitle) derivedTitle = `${a.parsedArtist} - ${a.parsedTitle}`;
+      else if (a.filename) derivedTitle = a.filename.replace(/\.[^.]+$/, '');
+    }
+    fd.append('title', titleInput || derivedTitle || 'souvenir');
     res = await fetch('/api/render', { method: 'POST', body: fd });
     if (!res.ok || !res.body) throw new Error('Server error: ' + res.status);
 
@@ -819,8 +831,8 @@ function handleEvent(e) {
       // way faster than the 20MB-base64-in-JSON approach we tried before.
       const a = $('downloadLink');
       a.href = e.downloadUrl;
-      a.download = `souvenir-${e.jobId}.mp4`;
-      $('resultMeta').textContent = `${e.sizeMB} MB · job ${e.jobId}`;
+      a.download = e.filename || `souvenir-${e.jobId}.mp4`;
+      $('resultMeta').textContent = `${e.sizeMB} MB · ${e.filename || e.jobId}`;
       resultEl.classList.add('show');
       try { a.click(); } catch {}
       break;
@@ -1090,10 +1102,9 @@ document.getElementById('photosUrl').addEventListener('change', function(){
       const link = v.commit !== 'dev'
         ? `<a href="https://github.com/gershonconsulting/HomeVideoCreation/commit/${v.commit}" target="_blank" rel="noreferrer">${v.shortCommit}</a>`
         : v.shortCommit;
-      // Footer (full info) + Header chip (compact)
-      document.getElementById('version-text').innerHTML = `<b>Souvenir v${v.app}</b> &middot; build ${link} &middot; deployed ${human}`;
+      document.getElementById('version-text').innerHTML = `<b>Souvenir Build ${v.build}</b> &middot; v${v.app} &middot; commit ${link} &middot; deployed ${human}`;
       const chip = document.getElementById('version-chip');
-      if (chip) chip.innerHTML = `v${v.app} &middot; ${link}<span class="deploy-time"> &middot; ${human}</span>`;
+      if (chip) chip.innerHTML = `Build ${v.build} &middot; ${link}<span class="deploy-time"> &middot; ${human}</span>`;
     } catch (e) {
       document.getElementById('version-text').textContent = 'version unknown';
       const chip = document.getElementById('version-chip'); if (chip) chip.textContent = '?';
