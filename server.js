@@ -748,84 +748,101 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   const srtPath = path.join(jobDir, 'captions.srt');
   await fs.writeFile(srtPath, srt);
 
-  // Photo transition strategy (in order of preference):
-  //  1. LYRIC-LINE anchored — photos change when a new line is sung. Best
-  //     narrative + musical sync. Requires LRCLIB synced lyrics.
-  //  2. BEAT anchored — photos change on detected beats. Requires aubio.
-  //  3. EVEN — fallback when neither is available.
+  // Photo transitions land on a UNION of three anchor sources:
+  //   * USER text [mm:ss] anchors   — so photo & text changes coincide
+  //   * LRCLIB synced-lyric anchors — denser narrative anchors  
+  //   * BEAT downbeats (aubio)      — fill any gap > 3s with downbeats so
+  //                                   photos always have a musical landing
   console.log('[photo] buildVideoArtifacts: photos=' + photoPaths.length + ', syncedLyricsRaw=' + (syncedLyricsRaw ? syncedLyricsRaw.length + ' chars' : 'MISSING'));
   emit && emit({ phase: 'beat', status: 'analyzing' });
 
-  let transitionTimes = null;
-  let mode = 'even';
-  let bpm = null;
+  // Re-parse user text to extract their [mm:ss] anchor times
+  const userCaptions = parseTextToCaptions(text, audioDuration, syncedLyricsRaw);
+  const userAnchors = userCaptions.map(c => c.start);
 
-  // 1. Try lyric-line anchoring
-  if (syncedLyricsRaw) {
-    const lines = parseLrcLines(syncedLyricsRaw).filter(l => l.text.length > 0);
-    if (lines.length >= 4) {
-      // Each photo claims a slice of the song. Distribute photos evenly across
-      // lyric lines; lines with longer durations get more photos. Photos change
-      // AT the start of each lyric line + at sub-line intervals when a line
-      // gets >1 photo.
-      const N = photoPaths.length;
-      const L = lines.length;
-      transitionTimes = [0];
-      let photoIdx = 1; // photo 0 starts at 0
-      for (let lineIdx = 0; lineIdx < L; lineIdx++) {
-        const lineStart = lines[lineIdx].time;
-        const lineEnd = (lineIdx + 1 < L) ? lines[lineIdx + 1].time : audioDuration;
-        // How many of the N photos should have transitioned by the END of this line?
-        // floor() avoids the 0.5-rounds-up bug (which made photo 0 short and the
-        // last photo bloated). Force the last line to bring us up to N.
-        const targetByEnd = (lineIdx === L - 1) ? N : Math.floor(((lineIdx + 1) / L) * N);
-        const photosThisLine = targetByEnd - (photoIdx - 1);
-        if (photosThisLine <= 0) continue;
-        // Photo at position photoIdx - 1 was already transitioned at start of THIS line.
-        // We need photosThisLine more transitions distributed up to lineEnd.
-        const subDur = (lineEnd - lineStart) / photosThisLine;
-        for (let j = 0; j < photosThisLine && photoIdx < N; j++) {
-          transitionTimes.push(lineStart + (j + 1) * subDur);
-          photoIdx++;
+  const lrcAnchors = syncedLyricsRaw
+    ? parseLrcLines(syncedLyricsRaw).filter(l => l.text.length > 0).map(l => l.time)
+    : [];
+
+  const beatResult = audioPath ? await detectBeats(audioPath) : null;
+  const downbeats = beatResult ? beatResult.beats.filter((_, i) => i % 4 === 0) : [];
+
+  // Merge with 0.4s tolerance dedup
+  const TOL = 0.4;
+  function mergeUnique(target, source) {
+    for (const t of source) {
+      if (t < 0 || t > audioDuration) continue;
+      if (target.some(x => Math.abs(x - t) < TOL)) continue;
+      target.push(t);
+    }
+  }
+  let anchors = [0];
+  mergeUnique(anchors, userAnchors);
+  mergeUnique(anchors, lrcAnchors);
+  anchors.sort((a, b) => a - b);
+
+  // Fill any gap >3s with downbeats so photos never sit motionless
+  if (downbeats.length) {
+    const filled = [anchors[0]];
+    for (let i = 1; i < anchors.length; i++) {
+      const gap = anchors[i] - anchors[i - 1];
+      if (gap > 3) {
+        for (const db of downbeats) {
+          if (db <= anchors[i - 1] + 1) continue;
+          if (db >= anchors[i] - 0.5) break;
+          if (filled.length === 0 || db - filled[filled.length - 1] > 1.5) {
+            filled.push(db);
+          }
         }
       }
-      // Pad if rounding left us short
-      while (transitionTimes.length < N) transitionTimes.push(audioDuration);
-      transitionTimes.push(audioDuration);
-      mode = `lyric-anchored (${L} lines, ${(N/L).toFixed(1)} photos/line avg)`;
-      console.log('[photo] mode=lyric  L=' + L + '  N=' + N);
-      emit && emit({ phase: 'beat', status: 'detected', bpm: null, beats: L, mode: 'lyric' });
+      filled.push(anchors[i]);
     }
+    anchors = filled;
   }
 
-  // 2. Fall back to beat anchoring
-  if (!transitionTimes) {
-    const beatResult = audioPath ? await detectBeats(audioPath) : null;
-    if (beatResult && beatResult.beats.length >= photoPaths.length) {
-      bpm = beatResult.bpm;
-      const beats = beatResult.beats;
-      transitionTimes = [0];
-      for (let i = 1; i < photoPaths.length; i++) {
-        const beatIdx = Math.round((i / photoPaths.length) * beats.length);
-        transitionTimes.push(beats[Math.min(beatIdx, beats.length - 1)]);
-      }
-      transitionTimes.push(audioDuration);
-      mode = `beat-synced (${bpm} BPM, ${beats.length} beats)`;
-      console.log('[photo] mode=beat   BPM=' + bpm + '  beats=' + beats.length + '  N=' + photoPaths.length);
-      emit && emit({ phase: 'beat', status: 'detected', bpm, beats: beats.length, mode: 'beat' });
-    }
-  }
+  const haveUser = userAnchors.length >= 4;
+  const haveLrc  = lrcAnchors.length  >= 4;
+  const haveBeats = downbeats.length > 0;
+  let mode;
+  if (haveUser && haveLrc && haveBeats) mode = `union · text(${userAnchors.length})+lrc(${lrcAnchors.length})+beat-fill (${anchors.length} total)`;
+  else if (haveUser && haveLrc)  mode = `text+lrc anchors (${anchors.length})`;
+  else if (haveLrc)              mode = `lrc anchors (${anchors.length})`;
+  else if (haveUser)             mode = `text anchors (${anchors.length})`;
+  else if (haveBeats)            mode = `beats only (${anchors.length})`;
+  else                           mode = `even (no anchors)`;
+  let bpm = beatResult ? beatResult.bpm : null;
 
-  // 3. Even spacing fallback
-  if (!transitionTimes) {
+  console.log('[photo] mode=' + mode + '  N=' + photoPaths.length + '  anchors=' + anchors.length);
+
+  // Distribute photos across the merged anchor list
+  let transitionTimes;
+  if (anchors.length >= 2) {
+    const N = photoPaths.length;
+    const A = anchors.length;
+    transitionTimes = [];
+    for (let i = 0; i <= N; i++) {
+      const exact = (i / N) * (A - 1);
+      const idx = Math.floor(exact);
+      const frac = exact - idx;
+      const a0 = anchors[Math.min(idx, A - 1)];
+      const a1 = anchors[Math.min(idx + 1, A - 1)];
+      transitionTimes.push(a0 + frac * (a1 - a0));
+    }
+    transitionTimes[transitionTimes.length - 1] = audioDuration;
+  } else {
     const perPhotoSec = audioDuration / photoPaths.length;
     transitionTimes = [];
     for (let i = 0; i < photoPaths.length; i++) transitionTimes.push(i * perPhotoSec);
     transitionTimes.push(audioDuration);
-    mode = 'even';
-    console.log('[photo] mode=even   (no lyrics, no beats)');
-    emit && emit({ phase: 'beat', status: 'fallback' });
   }
+
+  emit && emit({
+    phase: 'beat',
+    status: 'detected',
+    bpm,
+    beats: anchors.length,
+    mode: haveUser && haveLrc ? 'union' : (haveLrc ? 'lyric' : (haveBeats ? 'beat' : 'even')),
+  });
 
   // Build ffconcat playlist with explicit per-photo durations.
   // Last entry needs special handling: the concat demuxer drops the last
