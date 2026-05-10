@@ -865,21 +865,39 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     mode: haveUser && haveLrc ? 'union' : (haveLrc ? 'lyric' : (haveBeats ? 'beat' : 'even')),
   });
 
-  // Build ffconcat playlist. Photos LOOP through the photo list, so we
-  // cycle photoPaths[i % photoPaths.length] for each transition slot.
-  // The concat demuxer drops the last entry's duration unless the last
-  // file is repeated, hence the trailing repeat.
+  // Shuffle photos so adjacent transitions show visually different images.
+  // Google Photos exports chronologically — sequential photos (same beach
+  // moment, same family meal) look near-identical so consecutive transitions
+  // are perceived as 'stuck'. Fisher-Yates with a deterministic seed keeps
+  // shuffles reproducible across re-renders of the same album.
+  let seed = photoPaths.reduce((s, p) => (s + p.length) * 31, 0) & 0x7fffffff;
+  function rand() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+  const shuffled = photoPaths.slice();
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  // After shuffle, also re-shuffle every cycle so the second/third cycle
+  // through the album doesn't repeat the same order (visual variety).
+  function cyclicPhoto(slotIdx) {
+    const cycle = Math.floor(slotIdx / shuffled.length);
+    const offset = (slotIdx + cycle * 37) % shuffled.length; // 37 is coprime
+    return shuffled[offset];
+  }
+
+  // Build ffconcat playlist
   const slots = transitionTimes.length - 1;
   const concatLines = ['ffconcat version 1.0'];
   let lastFile = '';
   for (let i = 0; i < slots; i++) {
     const dur = transitionTimes[i + 1] - transitionTimes[i];
-    const f = photoPaths[i % photoPaths.length];
+    const f = cyclicPhoto(i);
     concatLines.push(`file '${f}'`);
     concatLines.push(`duration ${dur.toFixed(4)}`);
     lastFile = f;
   }
   concatLines.push(`file '${lastFile}'`);
+  console.log('[concat] slots=' + slots + ' unique_photos_used=' + new Set(Array.from({length: slots}, (_, i) => cyclicPhoto(i))).size);
   const concatPath = path.join(jobDir, 'photos.concat');
   await fs.writeFile(concatPath, concatLines.join('\n'));
 
