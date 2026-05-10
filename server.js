@@ -1179,6 +1179,108 @@ app.get('/api/jobs', async (req, res) => {
 // ───────────────────────────────────────────────────────────────
 app.get('/api/version', (_req, res) => res.json(VERSION));
 
+// Diagnostic: run the anchor-walk algorithm with provided inputs and return
+// the transition list + anchor counts + selected mode. No audio file needed —
+// pass the data as JSON. Used to verify production output matches local.
+//
+// POST /api/debug/transitions
+//   { text, audioDuration, syncedLyrics?, photoCount, bpm? }
+app.post('/api/debug/transitions', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    const { text = '', audioDuration = 240, syncedLyrics, photoCount = 80, bpm = 120 } = req.body || {};
+
+    // Re-parse to extract user anchors via the same path as the real flow
+    const userCaptions = parseTextToCaptions(text, audioDuration, syncedLyrics);
+    const userAnchors = userCaptions.map(c => c.start);
+    const lrcAnchors = syncedLyrics
+      ? parseLrcLines(syncedLyrics).filter(l => l.text.length > 0).map(l => l.time)
+      : [];
+
+    // Simulated downbeats (we have no audio file here)
+    const beatInterval = (60 / bpm) * 4;
+    const downbeats = [];
+    for (let t = 0; t < audioDuration; t += beatInterval) downbeats.push(+t.toFixed(2));
+
+    const TOL = 0.4;
+    function mergeUnique(target, source) {
+      for (const t of source) {
+        if (t < 0 || t > audioDuration) continue;
+        if (target.some(x => Math.abs(x - t) < TOL)) continue;
+        target.push(t);
+      }
+    }
+    let anchors = [0];
+    mergeUnique(anchors, userAnchors);
+    mergeUnique(anchors, lrcAnchors);
+    anchors.sort((a, b) => a - b);
+    const anchorsBeforeFill = anchors.length;
+
+    if (downbeats.length) {
+      const filled = [anchors[0]];
+      for (let i = 1; i < anchors.length; i++) {
+        const gap = anchors[i] - anchors[i - 1];
+        if (gap > 3) {
+          for (const db of downbeats) {
+            if (db <= anchors[i - 1] + 1) continue;
+            if (db >= anchors[i] - 0.5) break;
+            if (filled.length === 0 || db - filled[filled.length - 1] > 1.5) {
+              filled.push(db);
+            }
+          }
+        }
+        filled.push(anchors[i]);
+      }
+      anchors = filled;
+    }
+    const anchorsAfterFill = anchors.length;
+
+    const TARGET_PER = 2.0, MIN_PER = 1.4, MAX_PER = 3.0;
+    let transitionTimes = [0];
+    let safety = 5000;
+    while (transitionTimes[transitionTimes.length - 1] < audioDuration - 0.3 && safety-- > 0) {
+      const last = transitionTimes[transitionTimes.length - 1];
+      const ideal = last + TARGET_PER;
+      const winLo = last + MIN_PER;
+      const winHi = last + MAX_PER;
+      const inWin = anchors.filter(a => a >= winLo && a <= winHi);
+      let next;
+      if (inWin.length > 0) {
+        next = inWin.reduce((b, c) => Math.abs(c - ideal) < Math.abs(b - ideal) ? c : b);
+      } else {
+        next = Math.min(audioDuration, last + MAX_PER);
+      }
+      transitionTimes.push(next);
+    }
+    transitionTimes[transitionTimes.length - 1] = audioDuration;
+
+    const gaps = [];
+    for (let i = 1; i < transitionTimes.length; i++) gaps.push(transitionTimes[i] - transitionTimes[i-1]);
+    gaps.sort((a, b) => a - b);
+
+    res.json({
+      inputs: { audioDuration, photoCount, bpm, textLen: (text || '').length, syncedLyricsLen: (syncedLyrics || '').length },
+      anchors: {
+        userAnchorsCount: userAnchors.length,
+        lrcAnchorsCount: lrcAnchors.length,
+        downbeatsCount: downbeats.length,
+        anchorsBeforeFill,
+        anchorsAfterFill,
+      },
+      transitions: {
+        count: transitionTimes.length - 1,
+        minGap: gaps.length ? +gaps[0].toFixed(2) : 0,
+        maxGap: gaps.length ? +gaps[gaps.length-1].toFixed(2) : 0,
+        medianGap: gaps.length ? +gaps[Math.floor(gaps.length/2)].toFixed(2) : 0,
+        first20: transitionTimes.slice(0, 20).map(t => +t.toFixed(2)),
+        last20: transitionTimes.slice(-20).map(t => +t.toFixed(2)),
+      },
+      versionRunning: VERSION,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Health-check: returns whether each runtime tool is actually present on the
 // host. Useful for verifying aubio / ffmpeg / yt-dlp install on a fresh deploy.
 app.get('/api/healthz', async (_req, res) => {
