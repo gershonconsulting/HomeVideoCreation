@@ -660,11 +660,56 @@ function alignTextToSongStructure(userText, syncedLyricsRaw, audioDuration) {
 // If NO timestamps are present anywhere, fall back to even-distribution by
 // blank-line-separated paragraphs.
 function parseTextToCaptions(text, audioDuration, syncedLyricsRaw) {
-  const lines = text.split(/\r?\n/);
+  // Strip AI-tool citation noise that users frequently paste from LLM output.
+  // E.g. "[cite_start]Tu sais...[cite : 1]" becomes "Tu sais..."
+  text = (text || '')
+    .replace(/\[cite[^\]]*\]/gi, '')      // [cite : 1], [cite_start], [cite_end]
+    .replace(/\[citation[^\]]*\]/gi, '')  // [citation needed]
+    .replace(/\u00a0/g, ' ')                 // nbsp
+    .trim();
 
-  // First try song-structure alignment if the user has section markers AND
-  // we have synced lyrics. This wins over even-distribution because it
-  // anchors [Refrain] blocks to the actual chorus times in the audio.
+  if (!text) return [];
+
+  // Inline timestamp splitter: works whether the user pasted multi-line OR one
+  // long line with [mm:ss] markers embedded mid-sentence.
+  //   "Tu sais... [0:13] À prendre... [0:18] Tu rigoles..."
+  // becomes captions:
+  //   { start: 0,  end: 13, text: "Tu sais..." }      (only if 0:00 implied — see below)
+  //   { start: 13, end: 18, text: "À prendre..." }
+  //   { start: 18, end: ?,  text: "Tu rigoles..." }
+  const timestampRe = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+  const matches = [...text.matchAll(timestampRe)];
+
+  if (matches.length > 0) {
+    // Build captions from each timestamp's position to the next
+    const captions = [];
+    let prevEnd = 0;
+    let beforeFirst = text.slice(0, matches[0].index).trim();
+    if (beforeFirst) {
+      // Text before the first timestamp = intro caption from 0 to first timestamp
+      const firstM = matches[0];
+      const firstTime = parseInt(firstM[1], 10) * 60 + parseInt(firstM[2], 10) + (firstM[3] ? parseFloat('0.' + firstM[3]) : 0);
+      captions.push({ start: 0, end: firstTime, text: beforeFirst });
+    }
+    for (let idx = 0; idx < matches.length; idx++) {
+      const m = matches[idx];
+      const time = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + (m[3] ? parseFloat('0.' + m[3]) : 0);
+      const segStart = m.index + m[0].length;
+      const segEnd = idx + 1 < matches.length ? matches[idx + 1].index : text.length;
+      const segText = text.slice(segStart, segEnd).trim();
+      if (segText) {
+        const endTime = idx + 1 < matches.length
+          ? parseInt(matches[idx+1][1], 10) * 60 + parseInt(matches[idx+1][2], 10) + (matches[idx+1][3] ? parseFloat('0.' + matches[idx+1][3]) : 0)
+          : audioDuration;
+        captions.push({ start: time, end: Math.max(time + 0.5, endTime), text: segText });
+      }
+    }
+    return captions;
+  }
+
+  // No timestamps anywhere — try song-structure alignment if [Refrain]/[Chorus]
+  // markers are present and we have synced lyrics for anchors.
+  const lines = text.split(/\r?\n/);
   const hasSectionMarker = lines.some(l => /^\s*[\[\(]\s*(refrain|chorus|verse|couplet|parl)/i.test(l));
   if (hasSectionMarker && syncedLyricsRaw) {
     const aligned = alignTextToSongStructure(text, syncedLyricsRaw, audioDuration);
@@ -674,56 +719,21 @@ function parseTextToCaptions(text, audioDuration, syncedLyricsRaw) {
     }
   }
 
-  const timedRe = /^\s*\[(\d+):(\d+)(?:\.(\d+))?\]\s*(.*)$/;
-
-  // Detect: are there ANY timestamped lines?
-  const hasTimestamps = lines.some((l) => timedRe.test(l));
-
-  if (hasTimestamps) {
-    const captions = [];
-    let current = null;
-    for (const raw of lines) {
-      const m = raw.match(timedRe);
-      if (m) {
-        if (current) captions.push(current);
-        const minutes = parseInt(m[1], 10);
-        const seconds = parseInt(m[2], 10);
-        const frac = m[3] ? parseFloat('0.' + m[3]) : 0;
-        current = { start: minutes * 60 + seconds + frac, lines: [] };
-        const tailText = (m[4] || '').trim();
-        if (tailText) current.lines.push(tailText);
-      } else if (current && raw.trim()) {
-        // Continuation line for the current caption
-        current.lines.push(raw.trim());
-      }
-      // Lines outside any caption (no timestamp seen yet, or blank) are ignored
-    }
-    if (current) captions.push(current);
-
-    // Compute end times: each caption ends when the next begins (or at audio end)
-    return captions
-      .map((c, i) => {
-        const next = captions[i + 1];
-        const end = next ? next.start : audioDuration;
-        return { start: c.start, end, text: c.lines.join('\n') };
-      })
-      // Drop empty-text captions (they create gaps — desired behavior)
-      .filter((c) => c.text.length > 0 && c.end > c.start);
+  // Even-distribution fallback. Split on newlines first; if user pasted one
+  // run-on string, fall back to sentence boundaries so we don't end up with
+  // ONE caption spanning the whole song.
+  let segments = lines.map(l => l.trim()).filter(Boolean);
+  if (segments.length <= 1 && text.trim()) {
+    // Run-on paste — split on sentence-ending punctuation
+    segments = text.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
   }
-
-  // No timestamps — split on every non-empty line so a caption stays short.
-  // (Previously split only on blank-line paragraphs, which let one giant
-  // multi-line block sit on screen for the entire song.)
-  const segments = text
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
   if (segments.length === 0) return [];
+
   const segDur = audioDuration / segments.length;
-  return segments.map((text, i) => ({
+  return segments.map((segText, i) => ({
     start: i * segDur,
     end: (i + 1) * segDur,
-    text,
+    text: segText,
   }));
 }
 
@@ -994,7 +1004,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   try {
     if (!photosUrl) throw new Error('Missing photos URL.');
     if (!audioUrl && !req.file) throw new Error('Provide either an audio file or a YouTube URL.');
-    if (!text || !text.trim()) throw new Error('Missing text.');
+    if (opts.includeText && (!text || !text.trim())) throw new Error('Missing text. (Or set Show Text to "No" to render without captions.)');
 
     const jobId = randomUUID().slice(0, 8);
     const jobDir = path.join(JOBS_DIR, jobId);

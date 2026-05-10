@@ -1,12 +1,13 @@
 {
   "name": "souvenir",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Personal memory-film maker. Paste a Google Photos shared link, a YouTube link, and text. Get an MP4.",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node test/test_captions.mjs"
   },
   "engines": {
     "node": ">=18"
