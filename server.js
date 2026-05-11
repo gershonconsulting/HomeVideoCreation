@@ -1064,7 +1064,15 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   try {
     if (!photosUrl) throw new Error('Missing photos URL.');
     if (!audioUrl && !req.file) throw new Error('Provide either an audio file or a YouTube URL.');
-    if (opts.includeText && (!text || !text.trim())) throw new Error('Missing text. (Or set Show Text to "No" to render without captions.)');
+    // If user didn't provide custom text but we have synced lyrics from LRCLIB,
+    // use those directly as the caption source. This is the default "original
+    // lyrics" path — no editing required.
+    let effectiveText = text;
+    if ((!effectiveText || !effectiveText.trim()) && syncedLyrics) {
+      effectiveText = syncedLyrics;
+      console.log('[render] using LRCLIB synced lyrics as captions (' + syncedLyrics.length + ' chars)');
+    }
+    if (opts.includeText && (!effectiveText || !effectiveText.trim())) throw new Error('No captions: provide either custom text or run Analyze first to fetch synced lyrics.');
 
     const jobId = randomUUID().slice(0, 8);
     const jobDir = path.join(JOBS_DIR, jobId);
@@ -1093,7 +1101,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
     const { concatPath, srtPath, captionCount, mode, bpm } = await buildVideoArtifacts(
-      jobDir, photoPaths, text, audioDuration, audioPath, syncedLyrics, emit
+      jobDir, photoPaths, effectiveText, audioDuration, audioPath, syncedLyrics, emit
     );
     emit({
       phase: 'plan',

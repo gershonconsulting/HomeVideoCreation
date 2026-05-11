@@ -455,6 +455,21 @@
 }
 .version-chip a { color:inherit; text-decoration:underline; }
 .version-chip .deploy-time { opacity:0.6; margin-left:6px; }
+
+.caption-status {
+  padding: 12px 16px;
+  background: #f7f4ec;
+  border: 1px solid #e8e0c8;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #6b6450;
+  margin-bottom: 12px;
+}
+.caption-status.ready { background: #eef7ee; border-color: #c8e3c8; color: #2d5a2d; }
+.caption-status.missing { background: #fdf3f3; border-color: #f0c8c8; color: #8a3a3a; }
+.caption-advanced { margin-top: 8px; }
+.caption-advanced summary { cursor: pointer; font-size: 13px; color: #888; padding: 4px 0; }
+.caption-advanced summary:hover { color: #444; }
 </style>
 </head>
 <body>
@@ -514,17 +529,21 @@
     </div>
   </div>
 
-  <!-- 3. Story -->
+  <!-- 3. Captions -->
   <div class="field">
     <div class="field-head">
       <div class="field-num">iii.</div>
-      <div class="field-title">Tell the story</div>
+      <div class="field-title">Captions</div>
     </div>
     <p class="field-help">
-      Once you click <b>Analyze</b> above, the original synced lyrics auto-fill below — each line tagged with its
-      <code>[mm:ss]</code> timestamp. Edit any line you want to make personal. Keep the timestamps so each line still lands at the exact moment that part of the song plays.
+      The film uses the original synced lyrics from LRCLIB by default — each line lands at the exact moment of the song. After clicking <b>Analyze</b> above, you'll see the line count below.
     </p>
-    <textarea id="text" placeholder="(Click Analyze to load the original lyrics here, then edit the lines you want to personalize.)"></textarea>
+    <div id="captionsStatus" class="caption-status">Click Analyze first to load synced lyrics.</div>
+    <details class="caption-advanced" id="captionsAdvanced">
+      <summary>Advanced: edit captions manually</summary>
+      <p class="field-help" style="margin-top:8px">Each line tagged with its <code>[mm:ss]</code> timestamp. Keep the timestamps so each line lands at the right moment. Leave this empty to use the original LRCLIB lyrics.</p>
+      <textarea id="text" placeholder="Leave empty to use original synced lyrics. Or write your own with [mm:ss] timestamps per line."></textarea>
+    </details>
   </div>
 
   <!-- Settings -->
@@ -934,15 +953,17 @@ analyzeBtn.addEventListener('click', async () => {
     // Auto-fill the story textarea with the synced lyrics IF it's empty.
     // User can edit any line afterwards; the [mm:ss] anchors keep them
     // landing at the right moment.
-    const ta = document.getElementById('text');
+    const status = document.getElementById('captionsStatus');
     const hasSynced = data && data.lyrics && data.lyrics.synced && data.lyrics.lines && data.lyrics.lines.length > 0;
-    if (hasSynced && !ta.value.trim()) {
-      ta.value = data.lyrics.lines
-        .map(l => `[${fmtMmSs(l.time)}] ${l.text}`)
-        .join('\n');
-      analyzeHint.textContent = `Loaded ${data.lyrics.lines.length} lines below — edit the ones you want to personalize.`;
-    } else if (hasSynced && ta.value.trim()) {
-      analyzeHint.textContent = `${data.lyrics.lines.length} synced lines available. (Story field already has content; click "Reset to original lyrics" to replace.)`;
+    if (hasSynced) {
+      status.textContent = `Ready: ${data.lyrics.lines.length} synced lyric lines will be used as captions.`;
+      status.className = 'caption-status ready';
+    } else if (data && data.lyrics && data.lyrics.found) {
+      status.textContent = 'Lyrics found but not synced with timestamps. Captions will be evenly distributed.';
+      status.className = 'caption-status missing';
+    } else {
+      status.textContent = 'No synced lyrics found for this audio. Use the Advanced section below to write your own captions.';
+      status.className = 'caption-status missing';
     }
   } catch (err) {
     analyzeHint.textContent = 'Couldn\'t analyze: ' + (err.message || err);
