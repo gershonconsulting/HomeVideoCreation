@@ -679,8 +679,14 @@ async function startRender() {
     window.__notif_asked__ = true;
     try { Notification.requestPermission(); } catch {}
   }
-  // If Analyze is still mid-flight, wait for it. Without it the lyric anchors
-  // never reach the renderer and photos fall back to beat or even spacing.
+  // If Analyze hasn't run, trigger it now. Otherwise lyric anchors never reach
+  // the renderer and the FE validation will reject the empty-text request.
+  const haveInputs = !!($('photosUrl').value.trim() && $('audioFile').files[0]);
+  if (!lastAnalysis && haveInputs && !analyzeBtn.disabled) {
+    goBtn.textContent = 'Running Analyze first…';
+    goBtn.disabled = true;
+    analyzeBtn.click();
+  }
   if (analyzeBtn.disabled && analyzeBtn.textContent.includes('Analyzing')) {
     goBtn.textContent = 'Waiting for Analyze…';
     goBtn.disabled = true;
