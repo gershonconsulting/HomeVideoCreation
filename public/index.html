@@ -704,8 +704,11 @@ async function startRender() {
     includeText: $('includeText').value === 'true',
   };
 
-  if (!photosUrl || !audioFile || !text.trim()) {
-    showError('Need a Google Photos URL, an audio file, and the captions text.');
+  // Captions can come from EITHER the textarea OR LRCLIB synced lyrics (default).
+  // Block only when text is empty AND we have no synced lyrics from Analyze.
+  const haveSyncedLyrics = !!(lastAnalysis && lastAnalysis.lyrics && lastAnalysis.lyrics.syncedLyricsRaw);
+  if (!photosUrl || !audioFile || (!text.trim() && !haveSyncedLyrics)) {
+    showError('Need a Google Photos URL, an audio file, and either Analyze\'s synced lyrics or text in the Advanced section.');
     goBtn.disabled = false;
     goBtn.textContent = 'Render film →';
     return;
