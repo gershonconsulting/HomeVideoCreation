@@ -762,6 +762,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   }
   const srtPath = path.join(jobDir, 'captions.srt');
   await fs.writeFile(srtPath, srt);
+  console.log('[srt] wrote ' + captions.length + ' captions, ' + srt.length + ' bytes; first 3 start times: ' + captions.slice(0, 3).map(c => c.start.toFixed(1)).join(', ') + 's; last start: ' + (captions.length ? captions[captions.length-1].start.toFixed(1) : '-') + 's; effectiveText length: ' + (text||'').length);
 
   // Photo transitions land on a UNION of three anchor sources:
   //   * USER text [mm:ss] anchors   — so photo & text changes coincide

@@ -962,6 +962,9 @@ analyzeBtn.addEventListener('click', async () => {
     // Auto-fill the story textarea with the synced lyrics IF it's empty.
     // User can edit any line afterwards; the [mm:ss] anchors keep them
     // landing at the right moment.
+    // Explicitly clear textarea so any stale content from prior builds (when
+    // the textarea was auto-filled) can't override the LRCLIB synced lyrics.
+    document.getElementById('text').value = '';
     const status = document.getElementById('captionsStatus');
     const hasSynced = data && data.lyrics && data.lyrics.synced && data.lyrics.lines && data.lyrics.lines.length > 0;
     if (hasSynced) {
