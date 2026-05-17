@@ -764,137 +764,53 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   await fs.writeFile(srtPath, srt);
   console.log('[srt] wrote ' + captions.length + ' captions, ' + srt.length + ' bytes; first 3 start times: ' + captions.slice(0, 3).map(c => c.start.toFixed(1)).join(', ') + 's; last start: ' + (captions.length ? captions[captions.length-1].start.toFixed(1) : '-') + 's; effectiveText length: ' + (text||'').length);
 
-  // Photo transitions land on a UNION of three anchor sources:
-  //   * USER text [mm:ss] anchors   — so photo & text changes coincide
-  //   * LRCLIB synced-lyric anchors — denser narrative anchors  
-  //   * BEAT downbeats (aubio)      — fill any gap > 3s with downbeats so
-  //                                   photos always have a musical landing
-  console.log('[photo] buildVideoArtifacts: photos=' + photoPaths.length + ', syncedLyricsRaw=' + (syncedLyricsRaw ? syncedLyricsRaw.length + ' chars' : 'MISSING'));
+  // Photo cadence (Build 36): BPM-driven count, random selection, equal duration
+  //   1. Detect BPM via aubio (fall back to 100 if detection fails)
+  //   2. Compute target photo count from BPM + duration (~2-3s per photo)
+  //   3. Randomly sample that many photos from the album
+  //   4. Each selected photo displays once at constant duration. No looping.
+  console.log('[photo] buildVideoArtifacts: photos=' + photoPaths.length);
   emit && emit({ phase: 'beat', status: 'analyzing' });
-
-  // Re-parse user text to extract their [mm:ss] anchor times
-  const userCaptions = parseTextToCaptions(text, audioDuration, syncedLyricsRaw);
-  const userAnchors = userCaptions.map(c => c.start);
-
-  const lrcAnchors = syncedLyricsRaw
-    ? parseLrcLines(syncedLyricsRaw).filter(l => l.text.length > 0).map(l => l.time)
-    : [];
-
   const beatResult = audioPath ? await detectBeats(audioPath) : null;
-  const downbeats = beatResult ? beatResult.beats.filter((_, i) => i % 4 === 0) : [];
+  const bpm = beatResult ? beatResult.bpm : 100;
 
-  // Merge with 0.4s tolerance dedup
-  const TOL = 0.4;
-  function mergeUnique(target, source) {
-    for (const t of source) {
-      if (t < 0 || t > audioDuration) continue;
-      if (target.some(x => Math.abs(x - t) < TOL)) continue;
-      target.push(t);
-    }
+  // beats-per-photo: faster songs get more photos
+  let beatsPerPhoto = 6;
+  if (bpm >= 130) beatsPerPhoto = 4;
+  else if (bpm < 80) beatsPerPhoto = 8;
+  const secsPerPhoto = (60 / bpm) * beatsPerPhoto;
+  const targetCount = Math.max(1, Math.ceil(audioDuration / secsPerPhoto));
+  const usedCount = Math.min(targetCount, photoPaths.length);
+
+  // Random selection (Fisher-Yates; fresh random each render = different opener each time)
+  const shuffled = photoPaths.slice();
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  let anchors = [0];
-  mergeUnique(anchors, userAnchors);
-  mergeUnique(anchors, lrcAnchors);
-  anchors.sort((a, b) => a - b);
+  const selected = shuffled.slice(0, usedCount);
+  const perPhoto = audioDuration / usedCount;
 
-  // Fill any gap >3s with downbeats so photos never sit motionless
-  if (downbeats.length) {
-    const filled = [anchors[0]];
-    for (let i = 1; i < anchors.length; i++) {
-      const gap = anchors[i] - anchors[i - 1];
-      if (gap > 3) {
-        for (const db of downbeats) {
-          if (db <= anchors[i - 1] + 1) continue;
-          if (db >= anchors[i] - 0.5) break;
-          if (filled.length === 0 || db - filled[filled.length - 1] > 1.5) {
-            filled.push(db);
-          }
-        }
-      }
-      filled.push(anchors[i]);
-    }
-    anchors = filled;
-  }
+  const mode = `${bpm} BPM \u00b7 ${beatsPerPhoto} beats/photo (\u2248${secsPerPhoto.toFixed(1)}s each) \u00b7 ${usedCount}/${photoPaths.length} photos`;
+  console.log('[photo] ' + mode);
+  emit && emit({ phase: 'beat', status: 'detected', bpm, beats: usedCount, mode: 'tempo' });
 
-  const haveUser = userAnchors.length >= 4;
-  const haveLrc  = lrcAnchors.length  >= 4;
-  const haveBeats = downbeats.length > 0;
-  let mode;
-  if (haveUser && haveLrc && haveBeats) mode = `union · text(${userAnchors.length})+lrc(${lrcAnchors.length})+beat-fill (${anchors.length} total)`;
-  else if (haveUser && haveLrc)  mode = `text+lrc anchors (${anchors.length})`;
-  else if (haveLrc)              mode = `lrc anchors (${anchors.length})`;
-  else if (haveUser)             mode = `text anchors (${anchors.length})`;
-  else if (haveBeats)            mode = `beats only (${anchors.length})`;
-  else                           mode = `even (no anchors)`;
-  let bpm = beatResult ? beatResult.bpm : null;
-
-  console.log('[photo] mode=' + mode + '  N=' + photoPaths.length + '  anchors=' + anchors.length);
-
-  // Walk forward through the song, picking a transition every ~TARGET_PER
-  // seconds, snapping to the nearest anchor in [MIN_PER, MAX_PER]. If no
-  // anchor falls in that window, force a synthetic transition at MAX_PER so
-  // photos NEVER stay on screen longer than 3s.
-  // Photos LOOP — if we need more slots than photos, cycle back through.
-  const TARGET_PER = 2.0;
-  const MIN_PER    = 1.4;
-  const MAX_PER    = 3.0;
-  let transitionTimes = [0];
-  while (transitionTimes[transitionTimes.length - 1] < audioDuration - 0.3) {
-    const last = transitionTimes[transitionTimes.length - 1];
-    const ideal = last + TARGET_PER;
-    const winLo = last + MIN_PER;
-    const winHi = last + MAX_PER;
-    // Anchors in window
-    const inWin = anchors.filter(a => a >= winLo && a <= winHi);
-    let next;
-    if (inWin.length > 0) {
-      next = inWin.reduce((b, c) => Math.abs(c - ideal) < Math.abs(b - ideal) ? c : b);
-    } else {
-      next = Math.min(audioDuration, last + MAX_PER);
-    }
-    transitionTimes.push(next);
-  }
-  // Force last transition to audioDuration
-  transitionTimes[transitionTimes.length - 1] = audioDuration;
-  console.log('[photo] transitions=' + (transitionTimes.length - 1) + '  photos=' + photoPaths.length + '  cycle=' + Math.ceil((transitionTimes.length - 1) / photoPaths.length) + 'x');
-
-  emit && emit({
-    phase: 'beat',
-    status: 'detected',
-    bpm,
-    beats: anchors.length,
-    mode: haveUser && haveLrc ? 'union' : (haveLrc ? 'lyric' : (haveBeats ? 'beat' : 'even')),
-  });
-
-  // Use ALBUM ORDER — first photo in Google Photos becomes first in the
-  // film, so the user controls the opening shot via the album itself.
-  // (Build 29 had a shuffle; reverted because the random seed picked an
-  // unsuitable opener — sandwich-eating shot, per user feedback.)
-  function cyclicPhoto(slotIdx) {
-    return photoPaths[slotIdx % photoPaths.length];
-  }
-
-  // Build ffconcat playlist
-  const slots = transitionTimes.length - 1;
+  // Build ffconcat playlist: each selected photo at constant perPhoto duration
   const concatLines = ['ffconcat version 1.0'];
-  let lastFile = '';
-  for (let i = 0; i < slots; i++) {
-    const dur = transitionTimes[i + 1] - transitionTimes[i];
-    const f = cyclicPhoto(i);
-    concatLines.push(`file '${f}'`);
-    concatLines.push(`duration ${dur.toFixed(4)}`);
-    lastFile = f;
+  for (let i = 0; i < selected.length; i++) {
+    concatLines.push(`file '${selected[i]}'`);
+    concatLines.push(`duration ${perPhoto.toFixed(4)}`);
   }
-  concatLines.push(`file '${lastFile}'`);
-  console.log('[concat] slots=' + slots + ' unique_photos_used=' + new Set(Array.from({length: slots}, (_, i) => cyclicPhoto(i))).size);
+  concatLines.push(`file '${selected[selected.length - 1]}'`);
   const concatPath = path.join(jobDir, 'photos.concat');
   await fs.writeFile(concatPath, concatLines.join('\n'));
+  console.log('[concat] photos=' + selected.length + ' perPhoto=' + perPhoto.toFixed(2) + 's');
 
   return {
     concatPath,
     srtPath,
     captionCount: captions.length,
-    transitionCount: transitionTimes.length - 1,
+    transitionCount: selected.length,
     mode,
     bpm,
   };
