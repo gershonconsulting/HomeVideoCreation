@@ -1058,22 +1058,20 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   const opts = {
     resolution: options.resolution === '1080p' ? '1920x1080' : '1280x720',
     textPosition: options.textPosition || 'bottom', // 'bottom' | 'center'
-    includeText: options.includeText !== false,
+    includeText: options.includeText === true,  // default OFF — visuals only
     preset: options.preset || 'veryfast',
   };
 
   try {
     if (!photosUrl) throw new Error('Missing photos URL.');
     if (!audioUrl && !req.file) throw new Error('Provide either an audio file or a YouTube URL.');
-    // If user didn't provide custom text but we have synced lyrics from LRCLIB,
-    // use those directly as the caption source. This is the default "original
-    // lyrics" path — no editing required.
-    let effectiveText = text;
-    if ((!effectiveText || !effectiveText.trim()) && syncedLyrics) {
-      effectiveText = syncedLyrics;
-      console.log('[render] using LRCLIB synced lyrics as captions (' + syncedLyrics.length + ' chars)');
+    // Visuals-only mode is the new default. Captions are skipped entirely.
+    let effectiveText = '';
+    if (opts.includeText) {
+      effectiveText = text || '';
+      if ((!effectiveText || !effectiveText.trim()) && syncedLyrics) effectiveText = syncedLyrics;
     }
-    if (opts.includeText && (!effectiveText || !effectiveText.trim())) throw new Error('No captions: provide either custom text or run Analyze first to fetch synced lyrics.');
+    console.log('[render] includeText=' + opts.includeText + ', captions text length=' + effectiveText.length);
 
     const jobId = randomUUID().slice(0, 8);
     const jobDir = path.join(JOBS_DIR, jobId);

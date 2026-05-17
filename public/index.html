@@ -529,27 +529,10 @@
     </div>
   </div>
 
-  <!-- 3. Captions -->
-  <div class="field">
-    <div class="field-head">
-      <div class="field-num">iii.</div>
-      <div class="field-title">Captions</div>
-    </div>
-    <p class="field-help">
-      The film uses the original synced lyrics from LRCLIB by default — each line lands at the exact moment of the song. After clicking <b>Analyze</b> above, you'll see the line count below.
-    </p>
-    <div id="captionsStatus" class="caption-status">Click Analyze first to load synced lyrics.</div>
-    <details class="caption-advanced" id="captionsAdvanced">
-      <summary>Advanced: edit captions manually</summary>
-      <p class="field-help" style="margin-top:8px">Each line tagged with its <code>[mm:ss]</code> timestamp. Keep the timestamps so each line lands at the right moment. Leave this empty to use the original LRCLIB lyrics.</p>
-      <textarea id="text" placeholder="Leave empty to use original synced lyrics. Or write your own with [mm:ss] timestamps per line."></textarea>
-    </details>
-  </div>
-
   <!-- Settings -->
   <div class="field">
     <div class="field-head">
-      <div class="field-num">iv.</div>
+      <div class="field-num">iii.</div>
       <div class="field-title">Settings</div>
     </div>
     <div class="setting" style="margin-bottom:12px">
@@ -702,19 +685,15 @@ async function startRender() {
 
   const photosUrl = $('photosUrl').value.trim();
   const audioFile = $('audioFile').files[0];
-  const text      = $('text').value;
   const options = {
     resolution: $('resolution').value,
-    textPosition: $('textPosition').value,
     preset: $('preset').value,
-    includeText: $('includeText').value === 'true',
+    includeText: false,  // visuals-only mode
   };
 
-  // Captions can come from EITHER the textarea OR LRCLIB synced lyrics (default).
-  // Block only when text is empty AND we have no synced lyrics from Analyze.
-  const haveSyncedLyrics = !!(lastAnalysis && lastAnalysis.lyrics && lastAnalysis.lyrics.syncedLyricsRaw);
-  if (!photosUrl || !audioFile || (!text.trim() && !haveSyncedLyrics)) {
-    showError('Need a Google Photos URL, an audio file, and either Analyze\'s synced lyrics or text in the Advanced section.');
+  // Visuals-only mode — only photos + audio required.
+  if (!photosUrl || !audioFile) {
+    showError('Need a Google Photos URL and an audio file.');
     goBtn.disabled = false;
     goBtn.textContent = 'Render film →';
     return;
@@ -724,9 +703,10 @@ async function startRender() {
   try {
     const fd = new FormData();
     fd.append('photosUrl', photosUrl);
-    fd.append('text', text);
-    fd.append('options', JSON.stringify(options));
     fd.append('audioFile', audioFile);
+    fd.append('options', JSON.stringify(options));
+    // Pass synced lyrics from Analyze as ANCHOR data for photo cadence
+    // (not as captions — captions are disabled in this build).
     if (lastAnalysis && lastAnalysis.lyrics && lastAnalysis.lyrics.syncedLyricsRaw) {
       fd.append('syncedLyrics', lastAnalysis.lyrics.syncedLyricsRaw);
     }
