@@ -791,10 +791,9 @@ function handleEvent(e) {
       break;
 
     case 'plan':
-      // Show whether we ended up beat-synced or not
-      if (e.mode && e.mode !== 'even') {
+      if (e.mode) {
         const r = $('detail-beat');
-        if (r) r.textContent = e.mode;
+        if (r) r.textContent = `${e.mode} · ${e.transitions} photo transitions across ${Math.round(e.audioDuration)}s`;
       }
       break;
 

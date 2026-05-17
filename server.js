@@ -866,24 +866,12 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     mode: haveUser && haveLrc ? 'union' : (haveLrc ? 'lyric' : (haveBeats ? 'beat' : 'even')),
   });
 
-  // Shuffle photos so adjacent transitions show visually different images.
-  // Google Photos exports chronologically — sequential photos (same beach
-  // moment, same family meal) look near-identical so consecutive transitions
-  // are perceived as 'stuck'. Fisher-Yates with a deterministic seed keeps
-  // shuffles reproducible across re-renders of the same album.
-  let seed = photoPaths.reduce((s, p) => (s + p.length) * 31, 0) & 0x7fffffff;
-  function rand() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-  const shuffled = photoPaths.slice();
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  // After shuffle, also re-shuffle every cycle so the second/third cycle
-  // through the album doesn't repeat the same order (visual variety).
+  // Use ALBUM ORDER — first photo in Google Photos becomes first in the
+  // film, so the user controls the opening shot via the album itself.
+  // (Build 29 had a shuffle; reverted because the random seed picked an
+  // unsuitable opener — sandwich-eating shot, per user feedback.)
   function cyclicPhoto(slotIdx) {
-    const cycle = Math.floor(slotIdx / shuffled.length);
-    const offset = (slotIdx + cycle * 37) % shuffled.length; // 37 is coprime
-    return shuffled[offset];
+    return photoPaths[slotIdx % photoPaths.length];
   }
 
   // Build ffconcat playlist
@@ -906,6 +894,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     concatPath,
     srtPath,
     captionCount: captions.length,
+    transitionCount: transitionTimes.length - 1,
     mode,
     bpm,
   };
@@ -1099,12 +1088,13 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     emit({ phase: 'audio', status: 'duration', seconds: audioDuration });
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
-    const { concatPath, srtPath, captionCount, mode, bpm } = await buildVideoArtifacts(
+    const { concatPath, srtPath, captionCount, transitionCount, mode, bpm } = await buildVideoArtifacts(
       jobDir, photoPaths, effectiveText, audioDuration, audioPath, syncedLyrics, emit
     );
     emit({
       phase: 'plan',
       photos: photoPaths.length,
+      transitions: transitionCount,
       captions: captionCount,
       audioDuration,
       mode,
