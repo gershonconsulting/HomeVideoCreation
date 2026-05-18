@@ -758,6 +758,9 @@ function handleEvent(e) {
         setRow('photos', 'active', `${e.done} / ${e.total} downloaded`, e.done / e.total);
       } else if (e.status === 'done') {
         setRow('photos', 'done', `${e.count} photos ready`, 1);
+      } else if (e.status === 'deduped') {
+        const dupNote = e.duplicates > 0 ? ` (dropped ${e.duplicates} duplicates)` : '';
+        setRow('photos', 'done', `${e.unique} unique photos${dupNote}`, 1);
       }
       break;
 
