@@ -19,6 +19,7 @@ import fs from 'node:fs/promises';
 import { existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 // Shared yt-dlp flags to mitigate YouTube's anti-bot detection on cloud IPs:
 //  - player_client=android,web — the android client uses a different API path that's
 //    less aggressively bot-checked than the web player
@@ -805,6 +806,8 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   const concatPath = path.join(jobDir, 'photos.concat');
   await fs.writeFile(concatPath, concatLines.join('\n'));
   console.log('[concat] photos=' + selected.length + ' perPhoto=' + perPhoto.toFixed(2) + 's');
+  console.log('[concat] first 5 entries: ' + concatLines.slice(0, 11).join(' | '));
+  emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
 
   return {
     concatPath,
@@ -986,7 +989,27 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     // 1. Photos
     const photoUrls = await scrapeGooglePhotos(photosUrl, emit);
     const photoDir = path.join(jobDir, 'photos');
-    const photoPaths = await downloadPhotos(photoUrls, photoDir, emit);
+    let photoPaths = await downloadPhotos(photoUrls, photoDir, emit);
+
+    // DIAGNOSTIC: hash each downloaded file. Detect (and drop) duplicates.
+    const photoStats = await Promise.all(photoPaths.map(async (p) => {
+      const buf = await fs.readFile(p);
+      return { path: p, size: buf.length, hash: createHash('sha256').update(buf).digest('hex').slice(0, 16) };
+    }));
+    const seenHashes = new Set();
+    const uniquePhotos = [];
+    let dupCount = 0;
+    for (const ps of photoStats) {
+      if (seenHashes.has(ps.hash)) { dupCount++; continue; }
+      seenHashes.add(ps.hash);
+      uniquePhotos.push(ps.path);
+    }
+    console.log('[photos] urls=' + photoUrls.length + ' downloaded=' + photoPaths.length + ' unique=' + uniquePhotos.length + ' duplicates_dropped=' + dupCount + ' sizes=' + photoStats.map(s => s.size).slice(0,5).join(',') + '...');
+    if (dupCount > 0) {
+      console.warn('[photos] DUPLICATE FILES DETECTED — Google Photos returned ' + dupCount + ' identical images. Using ' + uniquePhotos.length + ' unique only.');
+    }
+    photoPaths = uniquePhotos;
+    emit({ phase: 'photos', status: 'deduped', total: photoStats.length, unique: uniquePhotos.length, duplicates: dupCount });
 
     // 2. Audio — uploaded file wins; otherwise fall back to yt-dlp
     let audioPath;
