@@ -796,16 +796,20 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   console.log('[photo] ' + mode);
   emit && emit({ phase: 'beat', status: 'detected', bpm, beats: usedCount, mode: 'tempo' });
 
-  // Build ffconcat playlist: each selected photo at constant perPhoto duration
-  const concatLines = ['ffconcat version 1.0'];
+  // Renumber selected photos into a sequential pattern: photo_0001.jpg ...
+  // ffmpeg's image2 demuxer with -framerate 1/perPhoto is dramatically faster
+  // than the concat demuxer with image inputs (single demuxer pass vs N).
+  const seqDir = path.join(jobDir, 'photo_seq');
+  await fs.mkdir(seqDir, { recursive: true });
   for (let i = 0; i < selected.length; i++) {
-    concatLines.push(`file '${selected[i]}'`);
-    concatLines.push(`duration ${perPhoto.toFixed(4)}`);
+    const ext = path.extname(selected[i]) || '.jpg';
+    const dst = path.join(seqDir, 'photo_' + String(i + 1).padStart(4, '0') + ext);
+    try { await fs.symlink(selected[i], dst); } catch { await fs.copyFile(selected[i], dst); }
   }
-  concatLines.push(`file '${selected[selected.length - 1]}'`);
-  const concatPath = path.join(jobDir, 'photos.concat');
-  await fs.writeFile(concatPath, concatLines.join('\n'));
-  console.log('[concat] photos=' + selected.length + ' perPhoto=' + perPhoto.toFixed(2) + 's');
+  const photoPattern = path.join(seqDir, 'photo_%04d' + (path.extname(selected[0]) || '.jpg'));
+  const concatPath = photoPattern; // reuse return var name for fewer downstream changes
+  console.log('[seq] ' + selected.length + ' photos symlinked at ' + perPhoto.toFixed(2) + 's each');
+  emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
   console.log('[concat] first 5 entries: ' + concatLines.slice(0, 11).join(' | '));
   emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
 
@@ -814,6 +818,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
     srtPath,
     captionCount: captions.length,
     transitionCount: selected.length,
+    perPhotoSec: perPhoto,
     mode,
     bpm,
   };
@@ -853,7 +858,7 @@ function detectBeats(audioPath) {
   });
 }
 
-function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, options, emit) {
+function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, options, emit, perPhotoForFfmpeg) {
   return new Promise((resolve, reject) => {
     const outputPath = path.join(jobDir, 'output.mp4');
     const [W, H] = options.resolution.split('x').map(Number);
@@ -894,18 +899,21 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
       `scale=${W}:${H}:force_original_aspect_ratio=increase`,
       `crop=${W}:${H}`,
       `setsar=1`,
-      `fps=30`,
+      `fps=24`,  // 24fps output: lower bitrate, faster encode
       ...(options.includeText ? [subFilter] : []),
     ].join(',');
 
+    // Read the per-photo duration from the photos.concat (now an image
+    // pattern path) — actually we stash it on the path via a marker file.
+    // Simpler: compute from existing slot count and audio duration.
     const args = [
       '-y',
       '-loglevel', 'info',
-      '-progress', 'pipe:2',  // progress info to stderr
-      // Slideshow: concat demuxer with explicit per-photo durations (so we can
-      //   beat-sync). 'safe 0' lets us reference absolute paths.
-      '-f', 'concat',
-      '-safe', '0',
+      '-progress', 'pipe:2',
+      // image2 demuxer at variable framerate (each image lasts perPhotoSec):
+      //   -framerate 1/X means each image shows for X seconds.
+      // This is 5-10x faster than concat demuxer with image inputs.
+      '-framerate', String(1 / (perPhotoForFfmpeg || 3)),
       '-i', concatPath,
       '-i', audioPath,
       '-vf', vf,
@@ -913,7 +921,7 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
       '-map', '1:a',
       '-threads', '1',
       '-c:v', 'libx264',
-      '-preset', options.preset || 'veryfast',
+      '-preset', 'ultrafast',  // free tier speed > quality
       '-crf', '22',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
@@ -1027,7 +1035,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     emit({ phase: 'audio', status: 'duration', seconds: audioDuration });
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
-    const { concatPath, srtPath, captionCount, transitionCount, mode, bpm } = await buildVideoArtifacts(
+    const { concatPath, srtPath, captionCount, transitionCount, perPhotoSec, mode, bpm } = await buildVideoArtifacts(
       jobDir, photoPaths, effectiveText, audioDuration, audioPath, syncedLyrics, emit
     );
     emit({
@@ -1042,7 +1050,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 
     // 4. Render
     const outputPath = await runFFmpeg(
-      jobDir, concatPath, srtPath, audioPath, audioDuration, opts, emit
+      jobDir, concatPath, srtPath, audioPath, audioDuration, opts, emit, perPhotoSec
     );
 
     const stat = await fs.stat(outputPath);

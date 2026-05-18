@@ -1,6 +1,6 @@
 {
   "name": "souvenir",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Personal memory-film maker. Paste a Google Photos shared link, a YouTube link, and text. Get an MP4.",
   "type": "module",
   "private": true,
@@ -16,5 +16,5 @@
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1"
   },
-  "build": 37
+  "build": 38
 }
