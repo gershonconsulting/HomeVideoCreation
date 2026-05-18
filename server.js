@@ -810,7 +810,6 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   const concatPath = photoPattern; // reuse return var name for fewer downstream changes
   console.log('[seq] ' + selected.length + ' photos symlinked at ' + perPhoto.toFixed(2) + 's each');
   emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
-  console.log('[concat] first 5 entries: ' + concatLines.slice(0, 11).join(' | '));
   emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
 
   return {
