@@ -796,20 +796,63 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   console.log('[photo] ' + mode);
   emit && emit({ phase: 'beat', status: 'detected', bpm, beats: usedCount, mode: 'tempo' });
 
-  // Renumber selected photos into a sequential pattern: photo_0001.jpg ...
-  // ffmpeg's image2 demuxer with -framerate 1/perPhoto is dramatically faster
-  // than the concat demuxer with image inputs (single demuxer pass vs N).
-  const seqDir = path.join(jobDir, 'photo_seq');
-  await fs.mkdir(seqDir, { recursive: true });
-  for (let i = 0; i < selected.length; i++) {
-    const ext = path.extname(selected[i]) || '.jpg';
-    const dst = path.join(seqDir, 'photo_' + String(i + 1).padStart(4, '0') + ext);
-    try { await fs.symlink(selected[i], dst); } catch { await fs.copyFile(selected[i], dst); }
+  // Per-photo video segments + concat (sandbox-verified working approach).
+  // ffmpeg's image2 demuxer drops photos in long sequences; the workaround is
+  // to encode each photo as a tiny .mp4 segment, then concat the video files.
+  // Generated in parallel (concurrency=4) to keep total time bounded.
+  const segDir = path.join(jobDir, 'segs');
+  await fs.mkdir(segDir, { recursive: true });
+  const [W, H] = (options.resolution || '1280x720').split('x').map(Number);
+  const concurrency = 4;
+  let segDone = 0;
+
+  async function encodeSegment(photoPath, segPath) {
+    return new Promise((resolve, reject) => {
+      const proc = spawn('ffmpeg', [
+        '-y', '-loglevel', 'error',
+        '-loop', '1', '-t', perPhoto.toFixed(4), '-i', photoPath,
+        '-vf', `scale=${W || 1280}:${H || 720}:force_original_aspect_ratio=increase,crop=${W || 1280}:${H || 720},setsar=1`,
+        '-r', '24',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+        segPath,
+      ]);
+      let err = '';
+      proc.stderr.on('data', (c) => (err += c.toString()));
+      proc.on('error', reject);
+      proc.on('close', (code) => code === 0 ? resolve() : reject(new Error('segment encode failed: ' + err.slice(0, 200))));
+    });
   }
-  const photoPattern = path.join(seqDir, 'photo_%04d' + (path.extname(selected[0]) || '.jpg'));
-  const concatPath = photoPattern; // reuse return var name for fewer downstream changes
-  console.log('[seq] ' + selected.length + ' photos symlinked at ' + perPhoto.toFixed(2) + 's each');
-  emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
+
+  // Worker pool: process selected[] with `concurrency` parallel ffmpegs
+  const segPaths = new Array(selected.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= selected.length) return;
+      const segPath = path.join(segDir, 'seg_' + String(i + 1).padStart(4, '0') + '.mp4');
+      try { await encodeSegment(selected[i], segPath); } catch (e) {
+        // If a photo fails to encode (rare format), skip it — concat will still work with the others
+        console.warn('[seg] photo ' + (i+1) + ' failed: ' + e.message.slice(0, 80));
+        continue;
+      }
+      segPaths[i] = segPath;
+      segDone++;
+      if (segDone % 10 === 0 || segDone === selected.length) {
+        emit && emit({ phase: 'concat', status: 'encoding', done: segDone, total: selected.length });
+        console.log('[seg] encoded ' + segDone + '/' + selected.length);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  // Build concat list of all successfully-encoded segments (preserves order)
+  const concatLines = [];
+  for (const p of segPaths) if (p) concatLines.push(`file '${p}'`);
+  const concatPath = path.join(jobDir, 'segs.concat');
+  await fs.writeFile(concatPath, concatLines.join('\n'));
+  console.log('[concat] ' + concatLines.length + ' video segments listed');
+  emit && emit({ phase: 'concat', status: 'done', count: concatLines.length, perPhotoSec: +perPhoto.toFixed(2) });
   emit && emit({ phase: 'concat', count: selected.length, perPhotoSec: +perPhoto.toFixed(2) });
 
   return {
@@ -909,10 +952,9 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
       '-y',
       '-loglevel', 'info',
       '-progress', 'pipe:2',
-      // image2 demuxer at variable framerate (each image lasts perPhotoSec):
-      //   -framerate 1/X means each image shows for X seconds.
-      // This is 5-10x faster than concat demuxer with image inputs.
-      '-framerate', String(1 / (perPhotoForFfmpeg || 3)),
+      // Concat demuxer over pre-encoded video segments (works reliably with
+      // 80+ inputs, unlike image2 which silently drops frames in long runs).
+      '-f', 'concat', '-safe', '0',
       '-i', concatPath,
       '-i', audioPath,
       '-vf', vf,
