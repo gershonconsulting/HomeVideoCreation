@@ -800,6 +800,14 @@ function handleEvent(e) {
       }
       break;
 
+    case 'concat':
+      if (e.status === 'encoding') {
+        setRow('render', 'active', `Encoding photo ${e.done}/${e.total}`, e.done / e.total);
+      } else if (e.status === 'done') {
+        setRow('render', 'active', `${e.count} segments ready · stitching`, 0.5);
+      }
+      break;
+
     case 'render':
       if (e.status === 'start') setRow('render', 'active', 'Encoding…', 0);
       else if (e.status === 'progress') {
