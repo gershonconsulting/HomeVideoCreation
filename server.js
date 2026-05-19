@@ -753,7 +753,7 @@ function parseTextToCaptions(text, audioDuration, syncedLyricsRaw) {
   }));
 }
 
-async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audioPath, syncedLyricsRaw, emit) {
+async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audioPath, syncedLyricsRaw, emit, options) {
   // captions.srt — built from parsed captions (timed or evenly distributed)
   const captions = parseTextToCaptions(text, audioDuration, syncedLyricsRaw);
   let srt = '';
@@ -802,7 +802,8 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   // Generated in parallel (concurrency=4) to keep total time bounded.
   const segDir = path.join(jobDir, 'segs');
   await fs.mkdir(segDir, { recursive: true });
-  const [W, H] = (options.resolution || '1280x720').split('x').map(Number);
+  const resStr = (options && options.resolution) || '1280x720';
+  const [W, H] = resStr.split('x').map(Number);
   const concurrency = 4;
   let segDone = 0;
 
@@ -1077,7 +1078,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
 
     // 3. Build SRT from text (timestamped or evenly distributed) + photo timing
     const { concatPath, srtPath, captionCount, transitionCount, perPhotoSec, mode, bpm } = await buildVideoArtifacts(
-      jobDir, photoPaths, effectiveText, audioDuration, audioPath, syncedLyrics, emit
+      jobDir, photoPaths, effectiveText, audioDuration, audioPath, syncedLyrics, emit, opts
     );
     emit({
       phase: 'plan',
