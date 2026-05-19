@@ -119,16 +119,45 @@ async function downloadPhotos(urls, dir, emit) {
   // Modest concurrency — Google Photos is fine but no need to hammer
   const CONCURRENCY = 6;
 
-  // Worker pool
+  // Worker pool with retry + per-fetch timeout + skip-on-permanent-failure.
+  // Without this, ANY transient 'fetch failed' on a single image (DNS/TLS/reset
+  // talking to lh3.googleusercontent.com) kills the whole render.
   const queue = urls.map((url, i) => ({ url, i }));
+  let skipped = 0;
+  async function fetchWithRetry(url, attempts = 3) {
+    let lastErr;
+    for (let a = 0; a < attempts; a++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000); // 20s per attempt
+      try {
+        const r = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return Buffer.from(await r.arrayBuffer());
+      } catch (e) {
+        clearTimeout(timer);
+        lastErr = e;
+        // exponential backoff: 0.5s, 1.5s, 3.5s
+        if (a < attempts - 1) await new Promise(rs => setTimeout(rs, 500 * Math.pow(3, a)));
+      }
+    }
+    throw lastErr;
+  }
   async function worker() {
     while (queue.length) {
       const { url, i } = queue.shift();
       const localName = `photo_${String(i).padStart(4, '0')}.jpg`;
       const localPath = path.join(dir, localName);
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`Photo ${i} failed: HTTP ${r.status}`);
-      const buf = Buffer.from(await r.arrayBuffer());
+      let buf;
+      try {
+        buf = await fetchWithRetry(url);
+      } catch (e) {
+        console.warn('[photo] skipping photo ' + i + ' after 3 retries: ' + (e.message || e));
+        skipped++;
+        done += 1;
+        emit({ phase: 'photos', status: 'progress', done, total: urls.length });
+        continue;
+      }
       await fs.writeFile(localPath, buf);
       localPaths[i] = localPath;
       done += 1;
@@ -137,8 +166,16 @@ async function downloadPhotos(urls, dir, emit) {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-  emit({ phase: 'photos', status: 'done', count: localPaths.length });
-  return localPaths;
+  // Filter out skipped slots
+  const filtered = localPaths.filter(Boolean);
+  if (skipped > 0) {
+    console.warn('[photo] downloaded=' + filtered.length + ' skipped=' + skipped + ' (of ' + urls.length + ')');
+  }
+  if (filtered.length === 0) {
+    throw new Error('All ' + urls.length + ' photo downloads failed. Check the Google Photos share link.');
+  }
+  emit({ phase: 'photos', status: 'done', count: filtered.length });
+  return filtered;
 }
 
 // ───────────────────────────────────────────────────────────────
