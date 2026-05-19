@@ -470,6 +470,23 @@
 .caption-advanced { margin-top: 8px; }
 .caption-advanced summary { cursor: pointer; font-size: 13px; color: #888; padding: 4px 0; }
 .caption-advanced summary:hover { color: #444; }
+
+.render-timer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-top: 12px;
+  background: #1a1a1a;
+  color: #f0e9d6;
+  border-radius: 8px;
+  font-family: 'SF Mono', Monaco, Menlo, monospace;
+  font-size: 18px;
+  letter-spacing: 1px;
+}
+.timer-icon { font-size: 16px; }
+.timer-hint { font-size: 12px; color: #999; letter-spacing: 0.5px; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -604,6 +621,11 @@
       <div class="detail" id="detail-render">Waiting</div>
     </div>
     <div class="progress" id="prog-render"><div class="progress-bar" id="bar-render"></div></div>
+    <div class="render-timer" id="renderTimer" style="display:none">
+      <span class="timer-icon">⏱</span>
+      <span id="timerText">00:00</span>
+      <span class="timer-hint" id="timerHint"></span>
+    </div>
   </div>
 
   <div class="result" id="result">
@@ -656,7 +678,34 @@ function fmtTime(s) {
   return `${m}:${ss}`;
 }
 
+// Render timer state
+let __renderTimerStart = null;
+let __renderTimerInterval = null;
+function startRenderTimer() {
+  __renderTimerStart = Date.now();
+  document.getElementById('renderTimer').style.display = 'flex';
+  document.getElementById('timerText').textContent = '00:00';
+  document.getElementById('timerHint').textContent = '(running on Render free tier — full render ~5 min)';
+  if (__renderTimerInterval) clearInterval(__renderTimerInterval);
+  __renderTimerInterval = setInterval(() => {
+    const sec = Math.floor((Date.now() - __renderTimerStart) / 1000);
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    document.getElementById('timerText').textContent = m + ':' + s;
+  }, 1000);
+}
+function stopRenderTimer(status) {
+  if (__renderTimerInterval) clearInterval(__renderTimerInterval);
+  __renderTimerInterval = null;
+  const sec = __renderTimerStart ? Math.floor((Date.now() - __renderTimerStart) / 1000) : 0;
+  const m = String(Math.floor(sec / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  document.getElementById('timerText').textContent = m + ':' + s;
+  document.getElementById('timerHint').textContent = status || '';
+}
+
 async function startRender() {
+  startRenderTimer();
   // Request notification permission only once per page load.
   if ('Notification' in window && Notification.permission === 'default' && !window.__notif_asked__) {
     window.__notif_asked__ = true;
@@ -820,6 +869,7 @@ function handleEvent(e) {
       break;
 
     case 'complete': {
+      stopRenderTimer('Done ✓');
       // Notify user — they may have switched tabs during the slow render
       try {
         if ('Notification' in window && Notification.permission === 'granted') {
@@ -857,12 +907,14 @@ function handleEvent(e) {
     }
 
     case 'error':
+      stopRenderTimer('Failed');
       showError(e.message);
       break;
   }
 }
 
 function showError(msg) {
+  stopRenderTimer('Failed');
   errorEl.innerHTML = '<strong>Couldn\'t render.</strong> ' + escapeHtml(msg);
   errorEl.classList.add('show');
   // Mark current active row as errored
