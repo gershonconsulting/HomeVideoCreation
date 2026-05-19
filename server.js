@@ -818,7 +818,11 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   else if (bpm < 80) beatsPerPhoto = 8;
   const secsPerPhoto = (60 / bpm) * beatsPerPhoto;
   const targetCount = Math.max(1, Math.ceil(audioDuration / secsPerPhoto));
-  const usedCount = Math.min(targetCount, photoPaths.length);
+  // Hard cap at 30 photos for free-tier compatibility: 82 photos × 0.5s per
+  // segment on 0.1 CPU = 5+ min just for segment encoding. With 30 photos,
+  // total render completes in ~1-2 min on Render free tier.
+  const FREE_TIER_MAX = 30;
+  const usedCount = Math.min(targetCount, photoPaths.length, FREE_TIER_MAX);
 
   // Random selection (Fisher-Yates; fresh random each render = different opener each time)
   const shuffled = photoPaths.slice();
