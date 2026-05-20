@@ -853,7 +853,7 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
       const proc = spawn('ffmpeg', [
         '-y', '-loglevel', 'error',
         '-loop', '1', '-t', perPhoto.toFixed(4), '-i', photoPath,
-        '-vf', `scale=${W || 1280}:${H || 720}:force_original_aspect_ratio=increase,crop=${W || 1280}:${H || 720},setsar=1`,
+        '-vf', `scale=${W || 1280}:${H || 720}:force_original_aspect_ratio=increase,crop=${W || 1280}:${H || 720}:(iw-${W || 1280})/2:(ih-${H || 720})/4,setsar=1`,
         '-r', '24',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
         segPath,
@@ -981,9 +981,9 @@ function runFFmpeg(jobDir, concatPath, srtPath, audioPath, audioDuration, option
     //   - burn subtitles
     const vf = [
       `scale=${W}:${H}:force_original_aspect_ratio=increase`,
-      `crop=${W}:${H}`,
+      `crop=${W}:${H}:(iw-${W})/2:(ih-${H})/4`,  // upper-bias Y so faces aren't cropped off the top
       `setsar=1`,
-      `fps=24`,  // 24fps output: lower bitrate, faster encode
+      `fps=24`,
       ...(options.includeText ? [subFilter] : []),
     ].join(',');
 
@@ -1082,25 +1082,42 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
     const photoDir = path.join(jobDir, 'photos');
     let photoPaths = await downloadPhotos(photoUrls, photoDir, emit);
 
-    // DIAGNOSTIC: hash each downloaded file. Detect (and drop) duplicates.
+    // Hash each downloaded file, detect duplicates AND non-image files (videos).
+    // Google Photos album scrape sometimes returns video URLs which download as
+    // MP4/WebM; ffmpeg's image2 input would either fail or produce garbage frames.
+    function isStillImage(buf) {
+      if (buf.length < 12) return false;
+      // JPEG: FF D8 FF
+      if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return true;
+      // PNG: 89 50 4E 47 0D 0A 1A 0A
+      if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return true;
+      // WebP: RIFF....WEBP
+      if (buf[0] === 0x52 && buf[1] === 0x49 && buf[8] === 0x57 && buf[9] === 0x45) return true;
+      // HEIC: ftyp...heic / mif1 / msf1 — these are HEIC stills but ffmpeg may struggle; allow JPEG/PNG/WebP only for now
+      return false;
+    }
     const photoStats = await Promise.all(photoPaths.map(async (p) => {
       const buf = await fs.readFile(p);
-      return { path: p, size: buf.length, hash: createHash('sha256').update(buf).digest('hex').slice(0, 16) };
+      return {
+        path: p,
+        size: buf.length,
+        hash: createHash('sha256').update(buf).digest('hex').slice(0, 16),
+        isImage: isStillImage(buf),
+      };
     }));
     const seenHashes = new Set();
     const uniquePhotos = [];
-    let dupCount = 0;
+    let dupCount = 0, videoCount = 0;
     for (const ps of photoStats) {
+      if (!ps.isImage) { videoCount++; continue; }
       if (seenHashes.has(ps.hash)) { dupCount++; continue; }
       seenHashes.add(ps.hash);
       uniquePhotos.push(ps.path);
     }
-    console.log('[photos] urls=' + photoUrls.length + ' downloaded=' + photoPaths.length + ' unique=' + uniquePhotos.length + ' duplicates_dropped=' + dupCount + ' sizes=' + photoStats.map(s => s.size).slice(0,5).join(',') + '...');
-    if (dupCount > 0) {
-      console.warn('[photos] DUPLICATE FILES DETECTED — Google Photos returned ' + dupCount + ' identical images. Using ' + uniquePhotos.length + ' unique only.');
-    }
+    console.log('[photos] urls=' + photoUrls.length + ' downloaded=' + photoPaths.length + ' unique=' + uniquePhotos.length + ' duplicates=' + dupCount + ' videos_dropped=' + videoCount);
+    if (videoCount > 0) console.warn('[photos] Dropped ' + videoCount + ' non-image file(s) (videos / unsupported formats)');
     photoPaths = uniquePhotos;
-    emit({ phase: 'photos', status: 'deduped', total: photoStats.length, unique: uniquePhotos.length, duplicates: dupCount });
+    emit({ phase: 'photos', status: 'deduped', total: photoStats.length, unique: uniquePhotos.length, duplicates: dupCount, videos: videoCount });
 
     // 2. Audio — uploaded file wins; otherwise fall back to yt-dlp
     let audioPath;
