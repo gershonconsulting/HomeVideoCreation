@@ -824,13 +824,10 @@ async function buildVideoArtifacts(jobDir, photoPaths, text, audioDuration, audi
   const FREE_TIER_MAX = 30;
   const usedCount = Math.min(targetCount, photoPaths.length, FREE_TIER_MAX);
 
-  // Random selection (Fisher-Yates; fresh random each render = different opener each time)
-  const shuffled = photoPaths.slice();
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  const selected = shuffled.slice(0, usedCount);
+  // Album order — first usedCount photos in the order Google Photos returned
+  // them (chronological from the album). User controls the opening by ordering
+  // the album in Google Photos itself.
+  const selected = photoPaths.slice(0, usedCount);
   const perPhoto = audioDuration / usedCount;
 
   const mode = `${bpm} BPM \u00b7 ${beatsPerPhoto} beats/photo (\u2248${secsPerPhoto.toFixed(1)}s each) \u00b7 ${usedCount}/${photoPaths.length} photos`;
@@ -1057,7 +1054,7 @@ app.post('/api/render', upload.single('audioFile'), async (req, res) => {
   const opts = {
     resolution: options.resolution === '1080p' ? '1920x1080' : '1280x720',
     textPosition: options.textPosition || 'bottom', // 'bottom' | 'center'
-    includeText: options.includeText === true,  // default OFF — visuals only
+    includeText: true,  // always burn synced lyrics if available (ffmpeg no-ops on empty SRT)
     preset: options.preset || 'veryfast',
   };
 
