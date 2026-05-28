@@ -1,0 +1,56 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host vps
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+          EOF
+
+      - name: Deploy
+        run: |
+          ssh vps "
+            set -e
+            cd /srv/souvenir
+            echo '[deploy] pulling latest from main...'
+            git checkout -- .
+            git pull origin main
+            echo '[deploy] stopping existing containers...'
+            docker compose -f docker-compose.prod.yml down || true
+            echo '[deploy] rebuilding and starting containers...'
+            docker compose -f docker-compose.prod.yml up -d --build
+            echo '[deploy] waiting 10s for container to be healthy...'
+            sleep 10
+            echo '[deploy] new version:' \$(curl -sf http://localhost:3737/api/version || echo 'version check skipped')
+          "
+
+      - name: Verify deployment
+        run: |
+          sleep 5
+          STATUS=$(curl -sf -o /dev/null -w '%{http_code}' https://songandstories.com || echo '000')
+          if [ "$STATUS" = "200" ]; then
+            echo "songandstories.com responding with 200"
+          else
+            echo "Warning: songandstories.com returned status $STATUS (may be initializing)"
+          fi
