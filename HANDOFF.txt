@@ -1,0 +1,100 @@
+================================================================
+HANDOFF.txt  -  HomeVideoCreation
+Written by: Claude (nightly run) - token-limit handoff protocol
+Date: 2026-10-27
+Reason: repo had no HANDOFF.txt. Another AI can continue this work
+        from this file alone.
+================================================================
+
+0. WHO YOU ARE READING THIS
+----------------------------------------------------------------
+You are an AI assistant (ChatGPT, Gemini, Copilot, or another Claude
+session) taking over work on this repository for Olivier Attia,
+founder / CTO of Gershon Consulting LLC.
+
+Read the MASTER HANDOFF first:
+  github.com/gershonconsulting/memory -> HANDOFF.txt
+It carries the full operating rules, the technical defaults, and the
+index of all repos.
+
+CRITICAL OPERATING RULES - do not break these:
+  * Olivier does NOT use a terminal, CLI, git or PowerShell. NEVER
+    give him commands, scripts, .bat files or 'just run this' steps.
+  * He does NOT upload, download, move or save files. If a file has
+    to get somewhere, YOU find the route and execute it.
+  * End every actionable reply with:
+      GREEN CHECK = ready for him to test (+ the link)
+      RED CROSS   = something still to do (+ exactly 3 options he can
+                    actually action - never a CLI step)
+  * Executors: Ariel = code and repo work. Charles = Chrome extension
+    and web admin panels (Cloudflare, GitHub settings, DNS, publishing).
+
+1. WHAT THIS REPO IS
+----------------------------------------------------------------
+Product / site name : Souvenir - personal memory-film maker
+Live URL            : https://songandstories.com (the deploy workflow checks
+                      this URL after each deploy)
+What it does        : User pastes a Google Photos shared link, a YouTube link
+                      and text; the server builds an MP4 memory film (ffmpeg,
+                      yt-dlp, captions).
+Who uses it         : Olivier / family (personal project).
+
+2. STACK AND DEPLOY ROUTE
+----------------------------------------------------------------
+Language / framework: Node 18+ / Express + multer (server.js), static UI in
+                      public/, Docker (Dockerfile, docker-compose.yml)
+Hosting             : a VPS at /srv/souvenir running Docker Compose on port
+                      3737 (NOT the Hostinger shared default). render.yaml
+                      exists as an alternative one-click Render deploy.
+DNS / registrar     : Tierra.net; Cloudflare for CDN/DNS/SSL
+Deploy method       : GitHub Actions .github/workflows/deploy.yml on push to
+                      main: SSH to the VPS, git pull, docker compose down/up
+                      --build with docker-compose.prod.yml, then curls
+                      songandstories.com.
+Default branch      : main
+How to ship a change: merge to main; the workflow deploys. Run
+                      npm test (test/test_captions.mjs) locally first.
+Secrets / env vars  : GitHub: DEPLOY_SSH_KEY, DEPLOY_HOST, DEPLOY_USER
+                      (values in 1Password).
+
+3. RECENTLY DONE  [DONE]
+----------------------------------------------------------------
+- 2026-05-28: GitHub Actions VPS deployment added. Version 0.11.1, build 47.
+
+4. PENDING  [TODO]
+----------------------------------------------------------------
+- Confirm songandstories.com returns 200 and that the latest Actions run is
+  green.
+
+5. MISSING / NOT BUILT YET
+----------------------------------------------------------------
+- docker-compose.prod.yml is referenced by the workflow but is NOT in the
+  repo (only docker-compose.yml); it must exist on the VPS.
+- Only one test file (captions).
+
+6. KNOWN BUGS / NEEDS FIXING
+----------------------------------------------------------------
+- Repo name (HomeVideoCreation), app name (Souvenir) and domain
+  (songandstories.com) differ; the separate songandstories repo is a
+  different Python CLI (lyrics rewriting), not this site.
+- README mentions a .devcontainer/ that is not in the repo.
+
+7. NEXT ACTION - START HERE
+----------------------------------------------------------------
+The single most valuable next step is:
+  -> Check the last deploy run and https://songandstories.com, then commit
+     docker-compose.prod.yml (without secrets) so the deploy is reproducible.
+
+8. GOTCHAS / HARD-WON LESSONS
+----------------------------------------------------------------
+- On Render pick a Web Service (Docker), never a Static Site: Souvenir
+  needs Node, ffmpeg and yt-dlp at runtime.
+
+9. CONTACT / ESCALATION
+----------------------------------------------------------------
+Olivier Attia - oattia@gmail.com
+Report mailbox - report@gershonconsulting.com
+
+================================================================
+END OF HANDOFF
+================================================================
